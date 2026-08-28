@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { DocumentContent } from "../App";
+import { invoke } from "@tauri-apps/api/core";
 
 async function loadUnicodeFont(doc: jsPDF) {
   try {
@@ -51,6 +52,9 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
 
     await loadUnicodeFont(doc);
 
+    // Cache to hold Base64 data for images during export
+    // const imageCache: Record<number, string> = {};
+
     console.log(`--> Đang vẽ ${content.elements.length} phần tử lên PDF...`);
 
     for (const el of content.elements) {
@@ -96,10 +100,19 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
           break;
         }
         case "Image": {
-          doc.rect(x, y, w, h);
-          doc.setFontSize(9);
-          doc.setFont("Roboto", "normal");
-          doc.text("[Image]", x + 2, y + 2, { baseline: "top" });
+          const assetId = props.asset_id;
+          if (assetId) {
+            try {
+              const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
+              doc.addImage(dataUrl, "PNG", x, y, w, h);
+            } catch (err) {
+              console.warn("Không thể nhúng ảnh PDF #" + assetId, err);
+              doc.rect(x, y, w, h);
+              doc.text("[Image]", x + 2, y + 2, { baseline: "top" });
+            }
+          } else {
+            doc.rect(x, y, w, h);
+          }
           break;
         }
       }

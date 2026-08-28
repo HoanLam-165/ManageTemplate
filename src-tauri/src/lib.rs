@@ -186,6 +186,75 @@ fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id:
     repo::DocumentRepo::delete(&conn, id, user.id)
 }
 
+#[tauri::command]
+fn upload_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    app_handle: tauri::AppHandle,
+    data_url: String,
+    file_name: String,
+) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+
+    let base64_str = if let Some(idx) = data_url.find(',') {
+        &data_url[idx + 1..]
+    } else {
+        &data_url
+    };
+
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_str)
+        .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
+
+    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
+        .map_err(|e| error::AppError::IoError(e.to_string()))?;
+
+    let path_str = saved_path.to_str().unwrap_or(&file_name);
+    let conn = db.0.lock().unwrap();
+    let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
+
+    Ok(asset_id)
+}
+
+#[tauri::command]
+fn get_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    id: i64,
+) -> Result<String, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    
+    let path: String = conn.query_row(
+        "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",
+        [id, user.id],
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Asset not found".into()))?;
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| error::AppError::IoError(format!("Không đọc được file: {}", e)))?;
+
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    };
+
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -200,7 +269,12 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![register, login, logout, get_current_user, get_templates, create_template, update_template, search_templates, get_documents, create_document, update_document, delete_template, delete_document])
+        .invoke_handler(tauri::generate_handler![
+            register, login, logout, get_current_user, get_templates, create_template, 
+            update_template, search_templates, get_documents, create_document, 
+            update_document, delete_template, delete_document, 
+            upload_asset_base64, get_asset_base64
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

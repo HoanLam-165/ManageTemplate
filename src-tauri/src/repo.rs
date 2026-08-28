@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use crate::models::{User, Template, Document, Asset, DocumentContent, Element, ElementType, ElementProperties};
+use crate::models::{User, Template, Document, DocumentContent, Element, ElementType, ElementProperties};
 use crate::error::AppError;
 use bcrypt::{hash, DEFAULT_COST};
 
