@@ -284,7 +284,7 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
         {ToastComponent}
 
         <div style={{ margin: "10px 0", display: "flex", gap: "5px" }}>
-          {(["Text", "Select", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
+          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
           <button onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
@@ -323,10 +323,9 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
                   <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
                 )}
                 {el.element_type === "Select" && (
-                  <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", outline: "none" }}>
-                    <option value="">-- Chọn --</option>
-                    {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
+                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
+                    {props.selected || "(Select)"}
+                  </div>
                 )}
                 {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
                 {el.element_type === "Image" && <ImageElement assetId={props.asset_id} />}
@@ -406,9 +405,6 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
                 </select> Alignment
               </div>
             </>
-          )}
-          {selectedElement.element_type === "Select" && (
-            <div>Options (comma separated):<br /><textarea value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map((s: string) => s.trim()) } })} /></div>
           )}
           {selectedElement.element_type === "Checkbox" && (
             <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } })} /></div>

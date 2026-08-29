@@ -263,7 +263,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
           <button onClick={handleExportPdf}>Export PDF</button>
         </div>
         <div style={{ margin: "10px 0", display: "flex", gap: "5px" }}>
-          {(["Text", "Select", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
+          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
           <button onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
@@ -312,10 +312,9 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                   />
                 )}
                 {el.element_type === "Select" && (
-                  <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", outline: "none" }}>
-                    <option value="">-- Chọn --</option>
-                    {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
+                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
+                    {props.selected || "(Select)"}
+                  </div>
                 )}
                 {el.element_type === "Checkbox" && (
                   <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />
@@ -397,9 +396,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                 </select> Alignment
               </div>
             </>
-          )}
-          {selectedElement.element_type === "Select" && (
-            <div>Options (comma separated):<br /><textarea value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map((s: string) => s.trim()) } })} /></div>
           )}
           {selectedElement.element_type === "Checkbox" && (
             <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } })} /></div>
