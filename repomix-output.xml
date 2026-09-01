@@ -1857,199 +1857,6 @@ function App() {
 export default App;
 </file>
 
-<file path="src/AuthView.tsx">
-import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { User } from "./App";
-
-interface AuthViewProps {
-  onLogin: (user: User) => void;
-}
-
-export function AuthView({ onLogin }: AuthViewProps) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [isRegister, setIsRegister] = useState(false);
-  const [error, setError] = useState("");
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    try {
-      if (isRegister) {
-        await invoke("register", { username, password });
-        setIsRegister(false);
-        setError("Account created. Please login.");
-      } else {
-        const user: User = await invoke("login", { username, password });
-        onLogin(user);
-      }
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  return (
-    <div style={{ height: "100vh", display: "flex", justifyContent: "center", alignItems: "center", backgroundColor: "#f1f5f9" }}>
-      <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "32px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}>
-        <div style={{ marginBottom: "24px", textAlign: "center" }}>
-          <h1 style={{ fontSize: "20px", fontWeight: "bold", margin: "0" }}>📑 Template Workspace</h1>
-          <p style={{ fontSize: "14px", color: "#64748b", margin: "8px 0 0" }}>Đăng nhập để quản lý và tái sử dụng biểu mẫu</p>
-        </div>
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: "16px" }}>
-            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Username</label>
-            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-          </div>
-          <div style={{ marginBottom: "24px" }}>
-            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Password</label>
-            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
-          <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" }} type="submit">{isRegister ? "Đăng ký" : "Đăng nhập"}</button>
-        </form>
-        <div style={{ marginTop: "16px", textAlign: "center", fontSize: "14px" }}>
-          <button style={{ background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontWeight: "500" }} onClick={() => setIsRegister(!isRegister)}>
-            {isRegister ? "Đã có tài khoản? Đăng nhập" : "Chưa có tài khoản? Đăng ký"}
-          </button>
-        </div>
-        {error && <div style={{ marginTop: "20px", padding: "12px", backgroundColor: "#fef2f2", color: "#dc2626", borderRadius: "8px", fontSize: "14px", textAlign: "center" }}>{error}</div>}
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="src/LibraryView.tsx">
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Template, Document } from "./App";
-import { EditorView } from "./EditorView";
-import { TemplateEditor } from "./TemplateEditor";
-import { exportToPdf } from "./editor/pdfExporter";
-import { useToast } from "./components/Toast";
-
-interface LibraryViewProps {
-  onLogout: () => void;
-}
-
-export function LibraryView({ onLogout }: LibraryViewProps) {
-  const { showToast, ToastComponent } = useToast();
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [editingDocId, setEditingDocId] = useState<number | null>(null);
-  const [editingTemplate, setEditingTemplate] = useState<Template | "new" | null>(null);
-
-  const handleExportPdf = async (d: any) => {
-    showToast("Đang khởi tạo và xuất PDF...", "loading");
-    try {
-      await exportToPdf(JSON.parse(d.metadata), d.name);
-      showToast("Xuất PDF thành công!", "success");
-    } catch (err) {
-      showToast("Xuất PDF thất bại!", "error");
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [activeTab]);
-
-  async function loadData() {
-    if (activeTab === "templates") {
-      setTemplates(await invoke("get_templates"));
-    } else {
-      setDocuments(await invoke("get_documents"));
-    }
-  }
-
-  async function useTemplate(templateId: number) {
-    const name = prompt("Document name:");
-    if (name) {
-      await invoke("create_document", { name, templateId });
-      setActiveTab("documents");
-      loadData();
-    }
-  }
-
-  async function handleDelete(type: "template" | "document", id: number) {
-    if (window.confirm(`Are you sure you want to delete this ${type}?`)) {
-      await invoke(type === "template" ? "delete_template" : "delete_document", { id });
-      loadData();
-    }
-  }
-
-  const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-  if (editingDocId !== null) {
-    return <EditorView documentId={editingDocId} onClose={() => { setEditingDocId(null); loadData(); }} />;
-  }
-
-  if (editingTemplate !== null) {
-    return (
-      <TemplateEditor
-        initialTemplate={editingTemplate === "new" ? undefined : editingTemplate}
-        onClose={() => { setEditingTemplate(null); loadData(); }}
-      />
-    );
-  }
-
-  return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#f8fafc" }}>
-      <nav style={{ height: "60px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
-        <div style={{ fontWeight: "bold", fontSize: "18px" }}>📑 Template Workspace</div>
-        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
-          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", boxShadow: activeTab === "templates" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("templates")}>Templates</button>
-          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", boxShadow: activeTab === "documents" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("documents")}>Documents</button>
-        </div>
-        <button style={{ background: "none", border: "1px solid #e2e8f0", color: "#64748b", padding: "6px 12px", borderRadius: "6px", cursor: "pointer" }} onClick={onLogout}>Logout</button>
-      </nav>
-
-      <div style={{ padding: "24px 32px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
-          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
-          <div style={{ display: "flex", gap: "12px" }}>
-            <input style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #e2e8f0" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", cursor: "pointer" }} onClick={() => setEditingTemplate("new")}>+ Tạo Template mới</button>}
-          </div>
-        </div>
-
-        {filteredData.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "64px", border: "2px dashed #e2e8f0", borderRadius: "12px", color: "#64748b" }}>Chưa có tài liệu nào. Bắt đầu bằng cách tạo mới!</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "16px" }}>
-            {filteredData.map((item: any) => (
-              <div key={item.id} style={{ backgroundColor: "#ffffff", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "border 0.2s, box-shadow 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.border = "1px solid #3b82f6"; e.currentTarget.style.boxShadow = "0 4px 6px -1px rgba(0,0,0,0.1)"; }} onMouseLeave={(e) => { e.currentTarget.style.border = "1px solid #e2e8f0"; e.currentTarget.style.boxShadow = "none"; }}>
-                <div style={{ marginBottom: "16px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: "600", marginBottom: "4px" }}>{item.name}</div>
-                  <div style={{ fontSize: "13px", color: "#64748b" }}>{item.description || "Không có mô tả"}</div>
-                </div>
-                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                  {activeTab === "templates" ? (
-                    <>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)}>Dùng</button>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingTemplate(item)}>Sửa</button>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)}>Xóa</button>
-                    </>
-                  ) : (
-                    <>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingDocId(item.id)}>Sửa</button>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)}>PDF</button>
-                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)}>Xóa</button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {ToastComponent}
-    </div>
-  );
-}
-</file>
-
 <file path="src/main.tsx">
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -4634,6 +4441,199 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
 }
 </file>
 
+<file path="src/AuthView.tsx">
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { User } from "./App";
+
+interface AuthViewProps {
+  onLogin: (user: User) => void;
+}
+
+export function AuthView({ onLogin }: AuthViewProps) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [isRegister, setIsRegister] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      if (isRegister) {
+        await invoke("register", { username, password });
+        setIsRegister(false);
+        setError("Account created. Please login.");
+      } else {
+        const user: User = await invoke("login", { username, password });
+        onLogin(user);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  return (
+    <div style={{ height: "100vh", display: "flex", justifyContent: "center", alignItems: "center", backgroundColor: "#f1f5f9" }}>
+      <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "32px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}>
+        <div style={{ marginBottom: "24px", textAlign: "center" }}>
+          <h1 style={{ fontSize: "20px", fontWeight: "bold", margin: "0" }}>📑 Template Workspace</h1>
+          <p style={{ fontSize: "14px", color: "#64748b", margin: "8px 0 0" }}>Đăng nhập để quản lý và tái sử dụng biểu mẫu</p>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Username</label>
+            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          </div>
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Password</label>
+            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" }} type="submit">{isRegister ? "Đăng ký" : "Đăng nhập"}</button>
+        </form>
+        <div style={{ marginTop: "16px", textAlign: "center", fontSize: "14px" }}>
+          <button style={{ background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontWeight: "500" }} onClick={() => setIsRegister(!isRegister)}>
+            {isRegister ? "Đã có tài khoản? Đăng nhập" : "Chưa có tài khoản? Đăng ký"}
+          </button>
+        </div>
+        {error && <div style={{ marginTop: "20px", padding: "12px", backgroundColor: "#fef2f2", color: "#dc2626", borderRadius: "8px", fontSize: "14px", textAlign: "center" }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/LibraryView.tsx">
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Template, Document } from "./App";
+import { EditorView } from "./EditorView";
+import { TemplateEditor } from "./TemplateEditor";
+import { exportToPdf } from "./editor/pdfExporter";
+import { useToast } from "./components/Toast";
+
+interface LibraryViewProps {
+  onLogout: () => void;
+}
+
+export function LibraryView({ onLogout }: LibraryViewProps) {
+  const { showToast, ToastComponent } = useToast();
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [editingDocId, setEditingDocId] = useState<number | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<Template | "new" | null>(null);
+
+  const handleExportPdf = async (d: any) => {
+    showToast("Đang khởi tạo và xuất PDF...", "loading");
+    try {
+      await exportToPdf(JSON.parse(d.metadata), d.name);
+      showToast("Xuất PDF thành công!", "success");
+    } catch (err) {
+      showToast("Xuất PDF thất bại!", "error");
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [activeTab]);
+
+  async function loadData() {
+    if (activeTab === "templates") {
+      setTemplates(await invoke("get_templates"));
+    } else {
+      setDocuments(await invoke("get_documents"));
+    }
+  }
+
+  async function useTemplate(templateId: number) {
+    const name = prompt("Document name:");
+    if (name) {
+      await invoke("create_document", { name, templateId });
+      setActiveTab("documents");
+      loadData();
+    }
+  }
+
+  async function handleDelete(type: "template" | "document", id: number) {
+    if (window.confirm(`Are you sure you want to delete this ${type}?`)) {
+      await invoke(type === "template" ? "delete_template" : "delete_document", { id });
+      loadData();
+    }
+  }
+
+  const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  if (editingDocId !== null) {
+    return <EditorView documentId={editingDocId} onClose={() => { setEditingDocId(null); loadData(); }} />;
+  }
+
+  if (editingTemplate !== null) {
+    return (
+      <TemplateEditor
+        initialTemplate={editingTemplate === "new" ? undefined : editingTemplate}
+        onClose={() => { setEditingTemplate(null); loadData(); }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", backgroundColor: "#f8fafc" }}>
+      <nav style={{ height: "60px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
+        <div style={{ fontWeight: "bold", fontSize: "18px" }}>📑 Template Workspace</div>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
+          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", boxShadow: activeTab === "templates" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("templates")}>Templates</button>
+          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", boxShadow: activeTab === "documents" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("documents")}>Documents</button>
+        </div>
+        <button style={{ background: "none", border: "1px solid #e2e8f0", color: "#64748b", padding: "6px 12px", borderRadius: "6px", cursor: "pointer" }} onClick={onLogout}>Logout</button>
+      </nav>
+
+      <div style={{ padding: "24px 32px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
+          <div style={{ display: "flex", gap: "12px" }}>
+            <input style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #e2e8f0" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", cursor: "pointer" }} onClick={() => setEditingTemplate("new")}>+ Tạo Template mới</button>}
+          </div>
+        </div>
+
+        {filteredData.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "64px", border: "2px dashed #e2e8f0", borderRadius: "12px", color: "#64748b" }}>Chưa có tài liệu nào. Bắt đầu bằng cách tạo mới!</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "16px" }}>
+            {filteredData.map((item: any) => (
+              <div key={item.id} style={{ backgroundColor: "#ffffff", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "border 0.2s, box-shadow 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.border = "1px solid #3b82f6"; e.currentTarget.style.boxShadow = "0 4px 6px -1px rgba(0,0,0,0.1)"; }} onMouseLeave={(e) => { e.currentTarget.style.border = "1px solid #e2e8f0"; e.currentTarget.style.boxShadow = "none"; }}>
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: "600", marginBottom: "4px" }}>{item.name}</div>
+                  <div style={{ fontSize: "13px", color: "#64748b" }}>{item.description || "Không có mô tả"}</div>
+                </div>
+                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                  {activeTab === "templates" ? (
+                    <>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)}>Dùng</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingTemplate(item)}>Sửa</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)}>Xóa</button>
+                    </>
+                  ) : (
+                    <>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingDocId(item.id)}>Sửa</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)}>PDF</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)}>Xóa</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {ToastComponent}
+    </div>
+  );
+}
+</file>
+
 <file path="src-tauri/src/assets.rs">
 use std::fs;
 use std::path::PathBuf;
@@ -4654,294 +4654,6 @@ pub fn save_asset(app_handle: &AppHandle, filename: &str, data: &[u8]) -> Result
     let file_path = assets_dir.join(filename);
     fs::write(&file_path, data)?;
     Ok(file_path)
-}
-</file>
-
-<file path="src-tauri/src/lib.rs">
-pub mod models;
-pub mod db;
-pub mod assets;
-pub mod error;
-pub mod repo;
-#[cfg(test)]
-mod tests;
-
-use tauri::Manager;
-use repo::{DbState};
-use std::sync::Mutex;
-use models::User;
-
-pub struct AuthState(pub Mutex<Option<User>>);
-
-// --- Auth Commands ---
-
-#[tauri::command]
-fn register(db: tauri::State<DbState>, username: &str, password: &str) -> Result<i64, error::AppError> {
-    let conn = db.0.lock().unwrap();
-    let user_id = repo::UserRepo::create(&conn, username, password)?;
-    repo::TemplateRepo::seed_for_user(&conn, user_id)?;
-    Ok(user_id)
-}
-
-#[tauri::command]
-fn login(
-    db: tauri::State<DbState>, 
-    auth: tauri::State<AuthState>, 
-    username: &str, 
-    password: &str
-) -> Result<User, error::AppError> {
-    let conn = db.0.lock().unwrap();
-    let user = repo::UserRepo::find_by_username(&conn, username)?
-        .ok_or(error::AppError::AuthError("User not found".into()))?;
-
-    bcrypt::verify(password, &user.password_hash)
-        .map_err(|_| error::AppError::AuthError("Verification failed".into()))?
-        .then_some(())
-        .ok_or(error::AppError::AuthError("Invalid password".into()))?;
-
-    let mut auth_state = auth.0.lock().unwrap();
-    *auth_state = Some(user.clone());
-
-    // Ensure seeded templates are populated/repaired
-    repo::TemplateRepo::seed_for_user(&conn, user.id)?;
-
-    Ok(user)
-}
-
-#[tauri::command]
-fn get_current_user(auth: tauri::State<AuthState>) -> Option<User> {
-    let auth_state = auth.0.lock().unwrap();
-    auth_state.clone()
-}
-
-#[tauri::command]
-fn logout(auth: tauri::State<AuthState>) {
-    let mut auth_state = auth.0.lock().unwrap();
-    *auth_state = None;
-}
-
-#[tauri::command]
-fn get_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::get_by_user(&conn, user.id)
-}
-
-#[tauri::command]
-fn create_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, description: Option<String>, metadata: &str) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    repo::TemplateRepo::create(&conn, user.id, name, description.as_deref(), metadata)
-}
-
-#[tauri::command]
-fn update_template(
-    db: tauri::State<DbState>, 
-    auth: tauri::State<AuthState>, 
-    id: i64, 
-    name: &str, 
-    description: Option<&str>, 
-    metadata: &str
-) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    // Verify ownership
-    let template: models::Template = conn.query_row(
-        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE id = ?1",
-        [id],
-        |row| Ok(models::Template {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            name: row.get(2)?,
-            description: row.get(3)?,
-            category_id: row.get(4)?,
-            thumbnail_asset_id: row.get(5)?,
-            metadata: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-        })
-    )?;
-
-    if template.user_id != user.id {
-        return Err(error::AppError::AuthError("Access denied".into()));
-    }
-
-    repo::TemplateRepo::update(&conn, id, name, description, metadata)
-}
-
-#[tauri::command]
-fn search_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>, query: &str) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::search_by_user(&conn, user.id, query)
-}
-
-#[tauri::command]
-fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Document>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::get_by_user(&conn, user.id)
-}
-
-#[tauri::command]
-fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
-}
-
-#[tauri::command]
-fn update_document(
-    db: tauri::State<DbState>, 
-    auth: tauri::State<AuthState>, 
-    id: i64, 
-    name: Option<&str>, 
-    metadata: &str
-) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    // Verify ownership
-    let doc_user_id: i64 = conn.query_row(
-        "SELECT user_id FROM documents WHERE id = ?1",
-        [id],
-        |row| row.get(0),
-    ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))?;
-
-    if doc_user_id != user.id {
-        return Err(error::AppError::AuthError("Access denied".into()));
-    }
-
-    if let Some(new_name) = name {
-        conn.execute(
-            "UPDATE documents SET name = ?1, metadata = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
-            (new_name, metadata, id),
-        )?;
-    } else {
-        conn.execute(
-            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            (metadata, id),
-        )?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn delete_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::delete(&conn, id, user.id)
-}
-
-#[tauri::command]
-fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::delete(&conn, id, user.id)
-}
-
-#[tauri::command]
-fn upload_asset_base64(
-    db: tauri::State<DbState>,
-    auth: tauri::State<AuthState>,
-    app_handle: tauri::AppHandle,
-    data_url: String,
-    file_name: String,
-) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-
-    let base64_str = if let Some(idx) = data_url.find(',') {
-        &data_url[idx + 1..]
-    } else {
-        &data_url
-    };
-
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64_str)
-        .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
-
-    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
-        .map_err(|e| error::AppError::IoError(e.to_string()))?;
-
-    let path_str = saved_path.to_str().unwrap_or(&file_name);
-    let conn = db.0.lock().unwrap();
-    let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
-
-    Ok(asset_id)
-}
-
-#[tauri::command]
-fn get_asset_base64(
-    db: tauri::State<DbState>,
-    auth: tauri::State<AuthState>,
-    id: i64,
-) -> Result<String, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    
-    let path: String = conn.query_row(
-        "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",
-        [id, user.id],
-        |row| row.get(0),
-    ).map_err(|_| error::AppError::DatabaseError("Asset not found".into()))?;
-
-    let bytes = std::fs::read(&path)
-        .map_err(|e| error::AppError::IoError(format!("Không đọc được file: {}", e)))?;
-
-    let ext = std::path::Path::new(&path)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
-
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => "image/png",
-    };
-
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:{};base64,{}", mime, encoded))
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let app_handle = app.handle();
-            let conn = db::init_db(Some(app_handle)).expect("Failed to initialize database");
-            
-            // Manage the DB connection and Auth state in Tauri
-            app.manage(DbState(Mutex::new(conn)));
-            app.manage(AuthState(Mutex::new(None)));
-            
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            register, login, logout, get_current_user, get_templates, create_template, 
-            update_template, search_templates, get_documents, create_document, 
-            update_document, delete_template, delete_document, 
-            upload_asset_base64, get_asset_base64
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
 </file>
 
@@ -5337,11 +5049,299 @@ base64 = "0.22"
 }
 </file>
 
+<file path="src-tauri/src/lib.rs">
+pub mod models;
+pub mod db;
+pub mod assets;
+pub mod error;
+pub mod repo;
+#[cfg(test)]
+mod tests;
+
+use tauri::Manager;
+use repo::{DbState};
+use std::sync::Mutex;
+use models::User;
+
+pub struct AuthState(pub Mutex<Option<User>>);
+
+// --- Auth Commands ---
+
+#[tauri::command]
+fn register(db: tauri::State<DbState>, username: &str, password: &str) -> Result<i64, error::AppError> {
+    let conn = db.0.lock().unwrap();
+    let user_id = repo::UserRepo::create(&conn, username, password)?;
+    repo::TemplateRepo::seed_for_user(&conn, user_id)?;
+    Ok(user_id)
+}
+
+#[tauri::command]
+fn login(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    username: &str, 
+    password: &str
+) -> Result<User, error::AppError> {
+    let conn = db.0.lock().unwrap();
+    let user = repo::UserRepo::find_by_username(&conn, username)?
+        .ok_or(error::AppError::AuthError("User not found".into()))?;
+
+    bcrypt::verify(password, &user.password_hash)
+        .map_err(|_| error::AppError::AuthError("Verification failed".into()))?
+        .then_some(())
+        .ok_or(error::AppError::AuthError("Invalid password".into()))?;
+
+    let mut auth_state = auth.0.lock().unwrap();
+    *auth_state = Some(user.clone());
+
+    // Ensure seeded templates are populated/repaired
+    repo::TemplateRepo::seed_for_user(&conn, user.id)?;
+
+    Ok(user)
+}
+
+#[tauri::command]
+fn get_current_user(auth: tauri::State<AuthState>) -> Option<User> {
+    let auth_state = auth.0.lock().unwrap();
+    auth_state.clone()
+}
+
+#[tauri::command]
+fn logout(auth: tauri::State<AuthState>) {
+    let mut auth_state = auth.0.lock().unwrap();
+    *auth_state = None;
+}
+
+#[tauri::command]
+fn get_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Template>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::get_by_user(&conn, user.id)
+}
+
+#[tauri::command]
+fn create_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, description: Option<String>, metadata: &str) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    repo::TemplateRepo::create(&conn, user.id, name, description.as_deref(), metadata)
+}
+
+#[tauri::command]
+fn update_template(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    id: i64, 
+    name: &str, 
+    description: Option<&str>, 
+    metadata: &str
+) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    // Verify ownership
+    let template: models::Template = conn.query_row(
+        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE id = ?1",
+        [id],
+        |row| Ok(models::Template {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            category_id: row.get(4)?,
+            thumbnail_asset_id: row.get(5)?,
+            metadata: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    )?;
+
+    if template.user_id != user.id {
+        return Err(error::AppError::AuthError("Access denied".into()));
+    }
+
+    repo::TemplateRepo::update(&conn, id, name, description, metadata)
+}
+
+#[tauri::command]
+fn search_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>, query: &str) -> Result<Vec<models::Template>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::search_by_user(&conn, user.id, query)
+}
+
+#[tauri::command]
+fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Document>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::get_by_user(&conn, user.id)
+}
+
+#[tauri::command]
+fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
+}
+
+#[tauri::command]
+fn update_document(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    id: i64, 
+    name: Option<&str>, 
+    metadata: &str
+) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    // Verify ownership
+    let doc_user_id: i64 = conn.query_row(
+        "SELECT user_id FROM documents WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))?;
+
+    if doc_user_id != user.id {
+        return Err(error::AppError::AuthError("Access denied".into()));
+    }
+
+    if let Some(new_name) = name {
+        conn.execute(
+            "UPDATE documents SET name = ?1, metadata = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            (new_name, metadata, id),
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::delete(&conn, id, user.id)
+}
+
+#[tauri::command]
+fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::delete(&conn, id, user.id)
+}
+
+#[tauri::command]
+fn upload_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    app_handle: tauri::AppHandle,
+    data_url: String,
+    file_name: String,
+) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+
+    let base64_str = if let Some(idx) = data_url.find(',') {
+        &data_url[idx + 1..]
+    } else {
+        &data_url
+    };
+
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_str)
+        .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
+
+    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
+        .map_err(|e| error::AppError::IoError(e.to_string()))?;
+
+    let path_str = saved_path.to_str().unwrap_or(&file_name);
+    let conn = db.0.lock().unwrap();
+    let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
+
+    Ok(asset_id)
+}
+
+#[tauri::command]
+fn get_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    id: i64,
+) -> Result<String, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    
+    let path: String = conn.query_row(
+        "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",
+        [id, user.id],
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Asset not found".into()))?;
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| error::AppError::IoError(format!("Không đọc được file: {}", e)))?;
+
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    };
+
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let app_handle = app.handle();
+            let conn = db::init_db(Some(app_handle)).expect("Failed to initialize database");
+            
+            // Manage the DB connection and Auth state in Tauri
+            app.manage(DbState(Mutex::new(conn)));
+            app.manage(AuthState(Mutex::new(None)));
+            
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            register, login, logout, get_current_user, get_templates, create_template, 
+            update_template, search_templates, get_documents, create_document, 
+            update_document, delete_template, delete_document, 
+            upload_asset_base64, get_asset_base64
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+</file>
+
 <file path="src/EditorView.tsx">
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { mmToPx, pxToMm } from "./editor/coordinates";
-import { Element, ElementType, DocumentContent } from "./App";
+import { Element, DocumentContent } from "./App";
 import { exportToPdf } from "./editor/pdfExporter";
 import { useToast } from "./components/Toast";
 
@@ -5359,7 +5359,7 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
+  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
 }
 
 export function EditorView({ documentId, onClose }: EditorViewProps) {
@@ -5378,9 +5378,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
-  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
-  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
-  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+  const [showCloseModal, setShowCloseModal] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -5397,6 +5395,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   editingIdRef.current = editingElementId;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
+  const lastSavedStateRef = useRef<string>("");
 
   useEffect(() => {
     async function loadDocument() {
@@ -5405,18 +5404,25 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         const docs: any[] = await invoke("get_documents");
         const doc = docs.find((d) => Number(d.id) === Number(documentId));
         if (doc) {
-          if (doc.name) {
-            setDocName(doc.name);
-            docNameRef.current = doc.name;
-          }
+          const initialName = doc.name || "Untitled Document";
+          let initialContent = {
+            schema_version: "1.0",
+            page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+            elements: [],
+          };
           if (doc.metadata) {
             const parsed = JSON.parse(doc.metadata);
-            setContent({
+            initialContent = {
               schema_version: parsed.schema_version || "1.0",
-              page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+              page: parsed.page || initialContent.page,
               elements: Array.isArray(parsed.elements) ? parsed.elements : [],
-            });
+            };
           }
+          setDocName(initialName);
+          docNameRef.current = initialName;
+          setContent(initialContent);
+          contentRef.current = initialContent;
+          lastSavedStateRef.current = JSON.stringify({ name: initialName, content: initialContent });
         }
       } catch (err) {
         console.error("Lỗi nạp Document:", err);
@@ -5426,6 +5432,19 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     }
     loadDocument();
   }, [documentId]);
+
+  const checkIsDirty = (): boolean => {
+    const currentState = JSON.stringify({ name: docNameRef.current, content: contentRef.current });
+    return lastSavedStateRef.current !== "" && lastSavedStateRef.current !== currentState;
+  };
+
+  const handleBack = () => {
+    if (checkIsDirty()) {
+      setShowCloseModal(true);
+    } else {
+      onClose();
+    }
+  };
 
   const saveSnapshot = () => {
     historyRef.current.push(structuredClone(contentRef.current));
@@ -5470,17 +5489,39 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     showToast("📋 Đã dán phần tử!", "success");
   };
 
-  const saveDocument = async () => {
+  const saveDocument = async (): Promise<boolean> => {
     try {
       await invoke("update_document", {
         id: documentId,
         name: docNameRef.current,
         metadata: JSON.stringify(contentRef.current),
       });
+      lastSavedStateRef.current = JSON.stringify({ name: docNameRef.current, content: contentRef.current });
       showToast("Đã lưu tài liệu thành công!", "success");
+      return true;
     } catch (err: any) {
       showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+      return false;
     }
+  };
+
+  const setOrientation = (orientation: "portrait" | "landscape") => {
+    saveSnapshot();
+    setContent((prev) => {
+      const isLandscape = prev.page.width_mm > prev.page.height_mm;
+      if ((orientation === "landscape" && isLandscape) || (orientation === "portrait" && !isLandscape)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        page: {
+          ...prev.page,
+          width_mm: prev.page.height_mm,
+          height_mm: prev.page.width_mm,
+        },
+      };
+    });
+    showToast(orientation === "landscape" ? "Đã chuyển sang khổ Ngang" : "Đã chuyển sang khổ Dọc", "success");
   };
 
   useEffect(() => {
@@ -5533,7 +5574,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         const idToDelete = selectedIdRef.current;
         setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
         setSelectedElementId(null);
-        setIsPropertiesOpen(false);
         showToast("🗑 Đã xóa phần tử!", "success");
         return;
       }
@@ -5648,23 +5688,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     };
   }, [dragInfo, resizeInfo]);
 
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
-      });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
-
   const handleExportPdf = async () => {
     showToast("Đang khởi tạo và xuất PDF...", "loading");
     try {
@@ -5723,138 +5746,230 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: ElementType) {
+  function addElement(type: "Text" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
+    let initialProps: any = { type: "Text", content: "Văn bản mới", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
+    let initialW = 50;
+    let initialH = 10;
+
+    if (type === "Checkbox") {
+      initialProps = { type: "Checkbox", checked: false };
+      initialW = 10;
+      initialH = 10;
+    }
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
+      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
       position_y_mm: 25,
-      width_mm: 40,
-      height_mm: 10,
-      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
-        : type === "Select" ? { type: "Select", options: [], selected: null }
-        : type === "Checkbox" ? { type: "Checkbox", checked: false }
-        : { type: "Image", asset_id: 0 },
+      width_mm: initialW,
+      height_mm: initialH,
+      properties: initialProps,
     };
     setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedElementId(newEl.id);
   }
 
-  const toggleOrientation = () => {
-    saveSnapshot();
-    setContent((prev) => ({
-      ...prev,
-      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
-    }));
-  };
-
-  if (loading) return <div style={{ padding: "32px", textAlign: "center" }}>⏳ Đang tải dữ liệu tài liệu...</div>;
+  if (loading) return <div style={{ padding: "32px", textAlign: "center", color: "#64748b" }}>⏳ Đang tải tài liệu...</div>;
   const selectedElement = content.elements.find((e) => e.id === selectedElementId);
+  const isLandscape = content.page.width_mm > content.page.height_mm;
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff", overflow: "hidden" }}>
       {ToastComponent}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", zIndex: 30 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
-          <input type="text" value={docName} onChange={(e) => setDocName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên tài liệu" />
+          <button onClick={handleBack} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer", fontWeight: 500 }}>← Quay lại</button>
+          <input type="text" value={docName} onChange={(e) => setDocName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent", width: "200px" }} placeholder="Tên tài liệu" />
         </div>
-        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
-          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
-            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+        <div style={{ display: "flex", gap: "6px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Text")}>+ Văn bản</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Checkbox")}>+ Checkbox</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>+ Hình ảnh</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => setOrientation(isLandscape ? "portrait" : "landscape")}>
+            {isLandscape ? "📃 Ngang" : "📄 Dọc"}
           </button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
-        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
-          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
-          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveDocument}>Save</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 500 }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={() => saveDocument()}>Save</button>
         </div>
       </header>
 
-      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-        <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-          {content.elements.map((el) => {
-            const props = (el.properties as any) || {};
-            const isEditing = editingElementId === el.id;
-            const isSelected = selectedElementId === el.id;
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+        <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
+          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+            {content.elements.map((el) => {
+              const props = (el.properties as any) || {};
+              const isEditing = editingElementId === el.id;
+              const isSelected = selectedElementId === el.id;
 
-            return (
-              <div
-                key={el.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
-                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
-                style={{
-                  position: "absolute",
-                  left: `${mmToPx(el.position_x_mm)}px`,
-                  top: `${mmToPx(el.position_y_mm)}px`,
-                  width: `${mmToPx(el.width_mm)}px`,
-                  height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
-                  cursor: isEditing ? "text" : "move",
-                  touchAction: "none",
-                  userSelect: "none",
-                }}
-                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
-                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
-                onPointerDown={(e) => {
-                  if (isEditing) return;
-                  saveSnapshot();
-                  (document.activeElement as HTMLElement)?.blur();
-                  setEditingElementId(null);
-                  e.stopPropagation();
-                  setSelectedElementId(el.id);
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
-                }}
-              >
-                {el.element_type === "Text" && (
-                  <textarea
-                    value={props.content || ""}
-                    onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
-                    onBlur={() => setEditingElementId(null)}
-                    style={{
-                      width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
-                      pointerEvents: isEditing ? "auto" : "none",
-                      fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
-                    }}
-                  />
-                )}
-                {el.element_type === "Select" && (
-                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
-                    {props.selected || "(Select)"}
-                  </div>
-                )}
-                {el.element_type === "Checkbox" && (
-                  <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />
-                )}
-                {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
+              return (
+                <div
+                  key={el.id}
+                  onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
+                  style={{
+                    position: "absolute",
+                    left: `${mmToPx(el.position_x_mm)}px`,
+                    top: `${mmToPx(el.position_y_mm)}px`,
+                    width: `${mmToPx(el.width_mm)}px`,
+                    height: `${mmToPx(el.height_mm)}px`,
+                    border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
+                    cursor: isEditing ? "text" : "move",
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
+                  onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                  onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
+                  onPointerDown={(e) => {
+                    if (isEditing) return;
+                    saveSnapshot();
+                    (document.activeElement as HTMLElement)?.blur();
+                    setEditingElementId(null);
+                    e.stopPropagation();
+                    setSelectedElementId(el.id);
+                    const rect = canvasRef.current?.getBoundingClientRect();
+                    if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
+                  }}
+                >
+                  {el.element_type === "Text" && (
+                    <textarea
+                      value={props.content || ""}
+                      onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
+                      onBlur={() => setEditingElementId(null)}
+                      style={{
+                        width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
+                        pointerEvents: isEditing ? "auto" : "none",
+                        fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
+                      }}
+                    />
+                  )}
+                  {el.element_type === "Checkbox" && (
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+                    </div>
+                  )}
+                  {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
 
-                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
-                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
-                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
-                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
-                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
-                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
-                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
-                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
-                })}
-              </div>
-            );
-          })}
+                  {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
+                    const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
+                    if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
+                    if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
+                    if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
+                    if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
+                    if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
+                    if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
+                    return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
+
+        <aside style={{ width: "290px", borderLeft: "1px solid #e2e8f0", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", zIndex: 20, padding: "16px", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          {selectedElement ? (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b" }}>Thuộc tính: {selectedElement.element_type}</span>
+                <button onClick={() => setSelectedElementId(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}>✕</button>
+              </div>
+
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Vị trí & Kích thước (mm)</span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>X:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Y:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Rộng (W):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Cao (H):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                </div>
+              </div>
+
+              <hr style={{ border: "none", borderTop: "1px solid #f1f5f9", margin: "16px 0" }} />
+
+              {selectedElement.element_type === "Text" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Nội dung</label>
+                    <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={selectedElement.properties.content || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Cỡ chữ (px)</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Định dạng & Căn lề</label>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_bold ? "#dbeafe" : "#ffffff", fontWeight: "bold", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: !selectedElement.properties.is_bold } }); }}>B</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_italic ? "#dbeafe" : "#ffffff", fontStyle: "italic", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: !selectedElement.properties.is_italic } }); }}>I</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_underline ? "#dbeafe" : "#ffffff", textDecoration: "underline", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: !selectedElement.properties.is_underline } }); }}>U</button>
+                    </div>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      {(["left", "center", "right"] as const).map((align) => (
+                        <button key={align} style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: (selectedElement.properties.alignment || "left") === align ? "#dbeafe" : "#ffffff", fontSize: "11px", cursor: "pointer", textTransform: "capitalize" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: align } }); }}>{align}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Checkbox" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input type="checkbox" id="chk-prop" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} />
+                  <label htmlFor="chk-prop" style={{ fontSize: "13px", color: "#334155", cursor: "pointer" }}>Đã đánh dấu (Checked)</label>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Image" && (
+                <div>
+                  <div style={{ height: "120px", border: "1px solid #e2e8f0", borderRadius: "6px", overflow: "hidden", marginBottom: "8px" }}>
+                    <ImageElement assetId={selectedElement.properties.asset_id}/>
+                  </div>
+                  <button style={{ width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: "12px", cursor: "pointer", fontWeight: 500 }} onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Thay đổi ảnh khác...</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b", display: "block", marginBottom: "16px" }}>⚙️ Thiết lập trang</span>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Khổ giấy A4 & Hướng</span>
+                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Tổng số phần tử</span>
+                <p style={{ margin: "6px 0 0 0", fontSize: "13px", color: "#334155" }}>{content.elements.length} phần tử trên trang</p>
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
 
       {contextMenu && (
         <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => {
             const target = content.elements.find((item) => item.id === contextMenu.elementId);
             if (target) {
               const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
@@ -5864,61 +5979,30 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
             setContextMenu(null);
           }}>📋 Nhân bản (Duplicate)</button>
           {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
-            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
+            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
           )}
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red", fontSize: "13px" }} onClick={() => {
             setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
             setSelectedElementId(null);
             setContextMenu(null);
           }}>🗑 Xóa (Delete)</button>
-          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
-            e.stopPropagation();
-            setSelectedElementId(contextMenu.elementId);
-            setIsPropertiesOpen(true);
-            setContextMenu(null);
-          }}>⚙️ Thuộc tính (Properties)...</button>
         </div>
       )}
 
-      {isPropertiesOpen && selectedElement && (
-        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
-            <h3>Properties: {selectedElement.element_type}</h3>
-            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
-          </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <hr />
-          {selectedElement.element_type === "Text" && (
-            <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
-              <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
-              </div>
-              <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select> Alignment
-              </div>
-            </>
-          )}
-          {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
-          )}
-          {selectedElement.element_type === "Image" && (
-            <div>
-              <ImageElement assetId={selectedElement.properties.asset_id} />
-              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
+      {showCloseModal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "24px", borderRadius: "12px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.2)" }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", fontWeight: 600, color: "#1e293b" }}>Lưu thay đổi trước khi thoát?</h3>
+            <p style={{ margin: "0 0 20px 0", fontSize: "13px", color: "#64748b", lineHeight: "1.5" }}>Tài liệu của bạn có các chỉnh sửa chưa được lưu lại. Bạn có muốn lưu trước khi đóng không?</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "#ffffff", border: "none", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={async () => {
+                const saved = await saveDocument();
+                if (saved) onClose();
+              }}>💾 Lưu và thoát</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={onClose}>🗑 Không lưu</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#ffffff", color: "#475569", border: "1px solid #e2e8f0", borderRadius: "8px", fontWeight: 500, cursor: "pointer", fontSize: "13px" }} onClick={() => setShowCloseModal(false)}>✕ Hủy</button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
@@ -5930,7 +6014,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { mmToPx, pxToMm } from "./editor/coordinates";
-import { Element, ElementType, DocumentContent } from "./App";
+import { Element, DocumentContent } from "./App";
 import { exportToPdf } from "./editor/pdfExporter";
 import { useToast } from "./components/Toast";
 
@@ -5948,14 +6032,14 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
+  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
 }
 
 export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps) {
   const { showToast, ToastComponent } = useToast();
   const templateId = initialTemplate?.id;
   const [name, setName] = useState(initialTemplate?.name || "New Template");
-  const [description, /* setDescription */] = useState(initialTemplate?.description || "");
+  const [description, setDescription] = useState(initialTemplate?.description || "");
   const [content, setContent] = useState<DocumentContent>(() => {
     if (initialTemplate?.metadata) {
       try {
@@ -5982,9 +6066,7 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
-  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
-  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
-  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+  const [showCloseModal, setShowCloseModal] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -6003,6 +6085,30 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
   editingIdRef.current = editingElementId;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
+  const lastSavedStateRef = useRef<string>(
+    JSON.stringify({
+      name: initialTemplate?.name || "New Template",
+      description: initialTemplate?.description || "",
+      content: content,
+    })
+  );
+
+  const checkIsDirty = (): boolean => {
+    const currentState = JSON.stringify({
+      name: nameRef.current,
+      description: descRef.current,
+      content: contentRef.current,
+    });
+    return lastSavedStateRef.current !== currentState;
+  };
+
+  const handleBack = () => {
+    if (checkIsDirty()) {
+      setShowCloseModal(true);
+    } else {
+      onClose();
+    }
+  };
 
   const saveSnapshot = () => {
     historyRef.current.push(structuredClone(contentRef.current));
@@ -6047,7 +6153,7 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     showToast("📋 Đã dán phần tử!", "success");
   };
 
-  async function saveTemplateInternal() {
+  async function saveTemplateInternal(): Promise<boolean> {
     try {
       if (templateId) {
         await invoke("update_template", {
@@ -6056,7 +6162,13 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
           description: descRef.current || null,
           metadata: JSON.stringify(contentRef.current),
         });
+        lastSavedStateRef.current = JSON.stringify({
+          name: nameRef.current,
+          description: descRef.current,
+          content: contentRef.current,
+        });
         showToast("Đã lưu Template thành công!", "success");
+        return true;
       } else {
         await invoke("create_template", {
           name: nameRef.current,
@@ -6065,9 +6177,11 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
         });
         showToast("Đã tạo Template mới thành công!", "success");
         onClose();
+        return true;
       }
     } catch (err: any) {
       showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+      return false;
     }
   }
 
@@ -6084,6 +6198,25 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
       showToast("Lưu thất bại: " + (err.message || String(err)), "error");
     }
   }
+
+  const setOrientation = (orientation: "portrait" | "landscape") => {
+    saveSnapshot();
+    setContent((prev) => {
+      const isLandscape = prev.page.width_mm > prev.page.height_mm;
+      if ((orientation === "landscape" && isLandscape) || (orientation === "portrait" && !isLandscape)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        page: {
+          ...prev.page,
+          width_mm: prev.page.height_mm,
+          height_mm: prev.page.width_mm,
+        },
+      };
+    });
+    showToast(orientation === "landscape" ? "Đã chuyển sang khổ Ngang" : "Đã chuyển sang khổ Dọc", "success");
+  };
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
@@ -6112,7 +6245,6 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
         const idToDelete = selectedIdRef.current;
         setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
         setSelectedElementId(null);
-        setIsPropertiesOpen(false);
         showToast("🗑 Đã xóa phần tử!", "success");
         return;
       }
@@ -6209,23 +6341,6 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     };
   }, [dragInfo, resizeInfo]);
 
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
-      });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
-
   async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -6284,134 +6399,226 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: ElementType) {
+  function addElement(type: "Text" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
+    let initialProps: any = { type: "Text", content: "Nhãn mẫu", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
+    let initialW = 50;
+    let initialH = 10;
+
+    if (type === "Checkbox") {
+      initialProps = { type: "Checkbox", checked: false };
+      initialW = 10;
+      initialH = 10;
+    }
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
+      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
       position_y_mm: 25,
-      width_mm: 40,
-      height_mm: 10,
-      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
-        : type === "Select" ? { type: "Select", options: [], selected: null }
-        : type === "Checkbox" ? { type: "Checkbox", checked: false }
-        : { type: "Image", asset_id: 0 },
+      width_mm: initialW,
+      height_mm: initialH,
+      properties: initialProps,
     };
     setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedElementId(newEl.id);
   }
 
-  const toggleOrientation = () => {
-    saveSnapshot();
-    setContent((prev) => ({
-      ...prev,
-      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
-    }));
-  };
-
   const selectedElement = content.elements.find((e) => e.id === selectedElementId);
-  const canvasWidth = mmToPx(content.page.width_mm);
-  const canvasHeight = mmToPx(content.page.height_mm);
+  const isLandscape = content.page.width_mm > content.page.height_mm;
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff", overflow: "hidden" }}>
       {ToastComponent}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", zIndex: 30 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên Template" />
+          <button onClick={handleBack} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer", fontWeight: 500 }}>← Quay lại</button>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent", width: "200px" }} placeholder="Tên Template" />
         </div>
-        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
-          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
-            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+        <div style={{ display: "flex", gap: "6px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Text")}>+ Văn bản</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Checkbox")}>+ Checkbox</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>+ Hình ảnh</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => setOrientation(isLandscape ? "portrait" : "landscape")}>
+            {isLandscape ? "📃 Ngang" : "📄 Dọc"}
           </button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
-        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
-          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
-          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveTemplateInternal}>Save</button>
-          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={saveAsNew}>Save As New</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 500 }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={() => saveTemplateInternal()}>Save</button>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 500 }} onClick={saveAsNew}>Save As New</button>
         </div>
       </header>
 
-      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-        <div ref={canvasRef} style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-          {content.elements.map((el) => {
-            const props = (el.properties as any) || {};
-            const isEditing = editingElementId === el.id;
-            const isSelected = selectedElementId === el.id;
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+        <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
+          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+            {content.elements.map((el) => {
+              const props = (el.properties as any) || {};
+              const isEditing = editingElementId === el.id;
+              const isSelected = selectedElementId === el.id;
 
-            return (
-              <div
-                key={el.id}
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  (document.activeElement as HTMLElement)?.blur();
-                  setEditingElementId(null);
-                  setSelectedElementId(el.id); 
-                }}
-                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
-                style={{
-                  position: "absolute",
-                  left: `${mmToPx(el.position_x_mm)}px`,
-                  top: `${mmToPx(el.position_y_mm)}px`,
-                  width: `${mmToPx(el.width_mm)}px`,
-                  height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
-                  cursor: isEditing ? "text" : "move",
-                  touchAction: "none",
-                  userSelect: "none",
-                }}
-                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
-                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
-                onPointerDown={(e) => {
-                  if (isEditing) return;
-                  saveSnapshot();
-                  (document.activeElement as HTMLElement)?.blur();
-                  setEditingElementId(null);
-                  e.stopPropagation();
-                  setSelectedElementId(el.id);
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
-                }}
-              >
-                {el.element_type === "Text" && (
-                  <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
-                )}
-                {el.element_type === "Select" && (
-                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
-                    {props.selected || "(Select)"}
-                  </div>
-                )}
-                {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
-                {el.element_type === "Image" && <ImageElement assetId={props.asset_id} />}
+              return (
+                <div
+                  key={el.id}
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    (document.activeElement as HTMLElement)?.blur();
+                    setEditingElementId(null);
+                    setSelectedElementId(el.id); 
+                  }}
+                  onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
+                  style={{
+                    position: "absolute",
+                    left: `${mmToPx(el.position_x_mm)}px`,
+                    top: `${mmToPx(el.position_y_mm)}px`,
+                    width: `${mmToPx(el.width_mm)}px`,
+                    height: `${mmToPx(el.height_mm)}px`,
+                    border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
+                    cursor: isEditing ? "text" : "move",
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
+                  onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                  onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
+                  onPointerDown={(e) => {
+                    if (isEditing) return;
+                    saveSnapshot();
+                    (document.activeElement as HTMLElement)?.blur();
+                    setEditingElementId(null);
+                    e.stopPropagation();
+                    setSelectedElementId(el.id);
+                    const rect = canvasRef.current?.getBoundingClientRect();
+                    if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
+                  }}
+                >
+                  {el.element_type === "Text" && (
+                    <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
+                  )}
+                  {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
+                  {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
 
-                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
-                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
-                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
-                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
-                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
-                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
-                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
-                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
-                })}
-              </div>
-            );
-          })}
+                  {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
+                    const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
+                    if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
+                    if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
+                    if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
+                    if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
+                    if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
+                    if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
+                    return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
+
+        <aside style={{ width: "290px", borderLeft: "1px solid #e2e8f0", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", zIndex: 20, padding: "16px", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          {selectedElement ? (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b" }}>Thuộc tính: {selectedElement.element_type}</span>
+                <button onClick={() => setSelectedElementId(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}>✕</button>
+              </div>
+
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Vị trí & Kích thước (mm)</span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>X:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Y:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Rộng (W):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Cao (H):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                </div>
+              </div>
+
+              <hr style={{ border: "none", borderTop: "1px solid #f1f5f9", margin: "16px 0" }} />
+
+              {selectedElement.element_type === "Text" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Nội dung mẫu</label>
+                    <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={selectedElement.properties.content || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Cỡ chữ (px)</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Định dạng & Căn lề</label>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_bold ? "#dbeafe" : "#ffffff", fontWeight: "bold", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: !selectedElement.properties.is_bold } }); }}>B</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_italic ? "#dbeafe" : "#ffffff", fontStyle: "italic", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: !selectedElement.properties.is_italic } }); }}>I</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_underline ? "#dbeafe" : "#ffffff", textDecoration: "underline", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: !selectedElement.properties.is_underline } }); }}>U</button>
+                    </div>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      {(["left", "center", "right"] as const).map((align) => (
+                        <button key={align} style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: (selectedElement.properties.alignment || "left") === align ? "#dbeafe" : "#ffffff", fontSize: "11px", cursor: "pointer", textTransform: "capitalize" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: align } }); }}>{align}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Checkbox" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input type="checkbox" id="chk-prop-tpl" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} />
+                  <label htmlFor="chk-prop-tpl" style={{ fontSize: "13px", color: "#334155", cursor: "pointer" }}>Mặc định đánh dấu</label>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Image" && (
+                <div>
+                  <div style={{ height: "120px", border: "1px solid #e2e8f0", borderRadius: "6px", overflow: "hidden", marginBottom: "8px" }}>
+                    <ImageElement assetId={selectedElement.properties.asset_id}/>
+                  </div>
+                  <button style={{ width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: "12px", cursor: "pointer", fontWeight: 500 }} onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Thay đổi ảnh khác...</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b", display: "block", marginBottom: "16px" }}>⚙️ Thiết lập Template</span>
+              <div style={{ marginBottom: "16px" }}>
+                <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Mô tả Template</label>
+                <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Nhập mô tả cho biểu mẫu..." />
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Khổ giấy A4 & Hướng</span>
+                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Tổng số phần tử</span>
+                <p style={{ margin: "6px 0 0 0", fontSize: "13px", color: "#334155" }}>{content.elements.length} phần tử trong mẫu</p>
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
 
       {contextMenu && (
         <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => {
             const target = content.elements.find((item) => item.id === contextMenu.elementId);
             if (target) {
               const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
@@ -6421,61 +6628,30 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
             setContextMenu(null);
           }}>📋 Nhân bản (Duplicate)</button>
           {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
-            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
+            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
           )}
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red", fontSize: "13px" }} onClick={() => {
             setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
             setSelectedElementId(null);
             setContextMenu(null);
           }}>🗑 Xóa (Delete)</button>
-          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
-            e.stopPropagation();
-            setSelectedElementId(contextMenu.elementId);
-            setIsPropertiesOpen(true);
-            setContextMenu(null);
-          }}>⚙️ Thuộc tính (Properties)...</button>
         </div>
       )}
 
-      {isPropertiesOpen && selectedElement && (
-        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
-            <h3>Properties: {selectedElement.element_type}</h3>
-            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
-          </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <hr />
-          {selectedElement.element_type === "Text" && (
-            <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
-              <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
-              </div>
-              <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select> Alignment
-              </div>
-            </>
-          )}
-          {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
-          )}
-          {selectedElement.element_type === "Image" && (
-            <div>
-              <ImageElement assetId={selectedElement.properties.asset_id} />
-              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
+      {showCloseModal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "24px", borderRadius: "12px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.2)" }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", fontWeight: 600, color: "#1e293b" }}>Lưu thay đổi trước khi thoát?</h3>
+            <p style={{ margin: "0 0 20px 0", fontSize: "13px", color: "#64748b", lineHeight: "1.5" }}>Mẫu biểu của bạn có các chỉnh sửa chưa được lưu lại. Bạn có muốn lưu trước khi đóng không?</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "#ffffff", border: "none", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={async () => {
+                const saved = await saveTemplateInternal();
+                if (saved) onClose();
+              }}>💾 Lưu và thoát</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={onClose}>🗑 Không lưu</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#ffffff", color: "#475569", border: "1px solid #e2e8f0", borderRadius: "8px", fontWeight: 500, cursor: "pointer", fontSize: "13px" }} onClick={() => setShowCloseModal(false)}>✕ Hủy</button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>

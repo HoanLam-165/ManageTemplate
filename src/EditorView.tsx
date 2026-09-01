@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { mmToPx, pxToMm } from "./editor/coordinates";
-import { Element, ElementType, DocumentContent } from "./App";
+import { Element, DocumentContent } from "./App";
 import { exportToPdf } from "./editor/pdfExporter";
 import { useToast } from "./components/Toast";
 
@@ -19,7 +19,7 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
+  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
 }
 
 export function EditorView({ documentId, onClose }: EditorViewProps) {
@@ -38,9 +38,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
-  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
-  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
-  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+  const [showCloseModal, setShowCloseModal] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -57,6 +55,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   editingIdRef.current = editingElementId;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
+  const lastSavedStateRef = useRef<string>("");
 
   useEffect(() => {
     async function loadDocument() {
@@ -65,18 +64,25 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         const docs: any[] = await invoke("get_documents");
         const doc = docs.find((d) => Number(d.id) === Number(documentId));
         if (doc) {
-          if (doc.name) {
-            setDocName(doc.name);
-            docNameRef.current = doc.name;
-          }
+          const initialName = doc.name || "Untitled Document";
+          let initialContent = {
+            schema_version: "1.0",
+            page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+            elements: [],
+          };
           if (doc.metadata) {
             const parsed = JSON.parse(doc.metadata);
-            setContent({
+            initialContent = {
               schema_version: parsed.schema_version || "1.0",
-              page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+              page: parsed.page || initialContent.page,
               elements: Array.isArray(parsed.elements) ? parsed.elements : [],
-            });
+            };
           }
+          setDocName(initialName);
+          docNameRef.current = initialName;
+          setContent(initialContent);
+          contentRef.current = initialContent;
+          lastSavedStateRef.current = JSON.stringify({ name: initialName, content: initialContent });
         }
       } catch (err) {
         console.error("Lỗi nạp Document:", err);
@@ -86,6 +92,19 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     }
     loadDocument();
   }, [documentId]);
+
+  const checkIsDirty = (): boolean => {
+    const currentState = JSON.stringify({ name: docNameRef.current, content: contentRef.current });
+    return lastSavedStateRef.current !== "" && lastSavedStateRef.current !== currentState;
+  };
+
+  const handleBack = () => {
+    if (checkIsDirty()) {
+      setShowCloseModal(true);
+    } else {
+      onClose();
+    }
+  };
 
   const saveSnapshot = () => {
     historyRef.current.push(structuredClone(contentRef.current));
@@ -130,17 +149,39 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     showToast("📋 Đã dán phần tử!", "success");
   };
 
-  const saveDocument = async () => {
+  const saveDocument = async (): Promise<boolean> => {
     try {
       await invoke("update_document", {
         id: documentId,
         name: docNameRef.current,
         metadata: JSON.stringify(contentRef.current),
       });
+      lastSavedStateRef.current = JSON.stringify({ name: docNameRef.current, content: contentRef.current });
       showToast("Đã lưu tài liệu thành công!", "success");
+      return true;
     } catch (err: any) {
       showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+      return false;
     }
+  };
+
+  const setOrientation = (orientation: "portrait" | "landscape") => {
+    saveSnapshot();
+    setContent((prev) => {
+      const isLandscape = prev.page.width_mm > prev.page.height_mm;
+      if ((orientation === "landscape" && isLandscape) || (orientation === "portrait" && !isLandscape)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        page: {
+          ...prev.page,
+          width_mm: prev.page.height_mm,
+          height_mm: prev.page.width_mm,
+        },
+      };
+    });
+    showToast(orientation === "landscape" ? "Đã chuyển sang khổ Ngang" : "Đã chuyển sang khổ Dọc", "success");
   };
 
   useEffect(() => {
@@ -193,7 +234,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         const idToDelete = selectedIdRef.current;
         setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
         setSelectedElementId(null);
-        setIsPropertiesOpen(false);
         showToast("🗑 Đã xóa phần tử!", "success");
         return;
       }
@@ -308,23 +348,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     };
   }, [dragInfo, resizeInfo]);
 
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
-      });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
-
   const handleExportPdf = async () => {
     showToast("Đang khởi tạo và xuất PDF...", "loading");
     try {
@@ -383,138 +406,230 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: ElementType) {
+  function addElement(type: "Text" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
+    let initialProps: any = { type: "Text", content: "Văn bản mới", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
+    let initialW = 50;
+    let initialH = 10;
+
+    if (type === "Checkbox") {
+      initialProps = { type: "Checkbox", checked: false };
+      initialW = 10;
+      initialH = 10;
+    }
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
+      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
       position_y_mm: 25,
-      width_mm: 40,
-      height_mm: 10,
-      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
-        : type === "Select" ? { type: "Select", options: [], selected: null }
-        : type === "Checkbox" ? { type: "Checkbox", checked: false }
-        : { type: "Image", asset_id: 0 },
+      width_mm: initialW,
+      height_mm: initialH,
+      properties: initialProps,
     };
     setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
     setSelectedElementId(newEl.id);
   }
 
-  const toggleOrientation = () => {
-    saveSnapshot();
-    setContent((prev) => ({
-      ...prev,
-      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
-    }));
-  };
-
-  if (loading) return <div style={{ padding: "32px", textAlign: "center" }}>⏳ Đang tải dữ liệu tài liệu...</div>;
+  if (loading) return <div style={{ padding: "32px", textAlign: "center", color: "#64748b" }}>⏳ Đang tải tài liệu...</div>;
   const selectedElement = content.elements.find((e) => e.id === selectedElementId);
+  const isLandscape = content.page.width_mm > content.page.height_mm;
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff", overflow: "hidden" }}>
       {ToastComponent}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", zIndex: 30 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
-          <input type="text" value={docName} onChange={(e) => setDocName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên tài liệu" />
+          <button onClick={handleBack} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer", fontWeight: 500 }}>← Quay lại</button>
+          <input type="text" value={docName} onChange={(e) => setDocName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent", width: "200px" }} placeholder="Tên tài liệu" />
         </div>
-        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
-          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
-          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
-            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+        <div style={{ display: "flex", gap: "6px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Text")}>+ Văn bản</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement("Checkbox")}>+ Checkbox</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>+ Hình ảnh</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => setOrientation(isLandscape ? "portrait" : "landscape")}>
+            {isLandscape ? "📃 Ngang" : "📄 Dọc"}
           </button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
-        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
-          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
-          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveDocument}>Save</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 500 }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={() => saveDocument()}>Save</button>
         </div>
       </header>
 
-      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-        <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
-          {content.elements.map((el) => {
-            const props = (el.properties as any) || {};
-            const isEditing = editingElementId === el.id;
-            const isSelected = selectedElementId === el.id;
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+        <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
+          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+            {content.elements.map((el) => {
+              const props = (el.properties as any) || {};
+              const isEditing = editingElementId === el.id;
+              const isSelected = selectedElementId === el.id;
 
-            return (
-              <div
-                key={el.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
-                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
-                style={{
-                  position: "absolute",
-                  left: `${mmToPx(el.position_x_mm)}px`,
-                  top: `${mmToPx(el.position_y_mm)}px`,
-                  width: `${mmToPx(el.width_mm)}px`,
-                  height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
-                  cursor: isEditing ? "text" : "move",
-                  touchAction: "none",
-                  userSelect: "none",
-                }}
-                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
-                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
-                onPointerDown={(e) => {
-                  if (isEditing) return;
-                  saveSnapshot();
-                  (document.activeElement as HTMLElement)?.blur();
-                  setEditingElementId(null);
-                  e.stopPropagation();
-                  setSelectedElementId(el.id);
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
-                }}
-              >
-                {el.element_type === "Text" && (
-                  <textarea
-                    value={props.content || ""}
-                    onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
-                    onBlur={() => setEditingElementId(null)}
-                    style={{
-                      width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
-                      pointerEvents: isEditing ? "auto" : "none",
-                      fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
-                    }}
-                  />
-                )}
-                {el.element_type === "Select" && (
-                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
-                    {props.selected || "(Select)"}
-                  </div>
-                )}
-                {el.element_type === "Checkbox" && (
-                  <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />
-                )}
-                {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
+              return (
+                <div
+                  key={el.id}
+                  onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
+                  style={{
+                    position: "absolute",
+                    left: `${mmToPx(el.position_x_mm)}px`,
+                    top: `${mmToPx(el.position_y_mm)}px`,
+                    width: `${mmToPx(el.width_mm)}px`,
+                    height: `${mmToPx(el.height_mm)}px`,
+                    border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
+                    cursor: isEditing ? "text" : "move",
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
+                  onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                  onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
+                  onPointerDown={(e) => {
+                    if (isEditing) return;
+                    saveSnapshot();
+                    (document.activeElement as HTMLElement)?.blur();
+                    setEditingElementId(null);
+                    e.stopPropagation();
+                    setSelectedElementId(el.id);
+                    const rect = canvasRef.current?.getBoundingClientRect();
+                    if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
+                  }}
+                >
+                  {el.element_type === "Text" && (
+                    <textarea
+                      value={props.content || ""}
+                      onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
+                      onBlur={() => setEditingElementId(null)}
+                      style={{
+                        width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
+                        pointerEvents: isEditing ? "auto" : "none",
+                        fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
+                      }}
+                    />
+                  )}
+                  {el.element_type === "Checkbox" && (
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+                    </div>
+                  )}
+                  {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
 
-                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
-                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
-                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
-                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
-                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
-                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
-                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
-                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
-                })}
-              </div>
-            );
-          })}
+                  {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
+                    const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
+                    if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
+                    if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
+                    if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
+                    if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
+                    if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                    if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
+                    if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
+                    return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
+
+        <aside style={{ width: "290px", borderLeft: "1px solid #e2e8f0", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", zIndex: 20, padding: "16px", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          {selectedElement ? (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b" }}>Thuộc tính: {selectedElement.element_type}</span>
+                <button onClick={() => setSelectedElementId(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}>✕</button>
+              </div>
+
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Vị trí & Kích thước (mm)</span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>X:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Y:</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Rộng (W):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", color: "#64748b" }}>Cao (H):</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", boxSizing: "border-box" }} value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} />
+                  </div>
+                </div>
+              </div>
+
+              <hr style={{ border: "none", borderTop: "1px solid #f1f5f9", margin: "16px 0" }} />
+
+              {selectedElement.element_type === "Text" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Nội dung</label>
+                    <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={selectedElement.properties.content || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Cỡ chữ (px)</label>
+                    <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Định dạng & Căn lề</label>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_bold ? "#dbeafe" : "#ffffff", fontWeight: "bold", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: !selectedElement.properties.is_bold } }); }}>B</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_italic ? "#dbeafe" : "#ffffff", fontStyle: "italic", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: !selectedElement.properties.is_italic } }); }}>I</button>
+                      <button style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: selectedElement.properties.is_underline ? "#dbeafe" : "#ffffff", textDecoration: "underline", cursor: "pointer" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: !selectedElement.properties.is_underline } }); }}>U</button>
+                    </div>
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                      {(["left", "center", "right"] as const).map((align) => (
+                        <button key={align} style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #e2e8f0", background: (selectedElement.properties.alignment || "left") === align ? "#dbeafe" : "#ffffff", fontSize: "11px", cursor: "pointer", textTransform: "capitalize" }} onClick={() => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: align } }); }}>{align}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Checkbox" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input type="checkbox" id="chk-prop" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} />
+                  <label htmlFor="chk-prop" style={{ fontSize: "13px", color: "#334155", cursor: "pointer" }}>Đã đánh dấu (Checked)</label>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Image" && (
+                <div>
+                  <div style={{ height: "120px", border: "1px solid #e2e8f0", borderRadius: "6px", overflow: "hidden", marginBottom: "8px" }}>
+                    <ImageElement assetId={selectedElement.properties.asset_id}/>
+                  </div>
+                  <button style={{ width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: "12px", cursor: "pointer", fontWeight: 500 }} onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Thay đổi ảnh khác...</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <span style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b", display: "block", marginBottom: "16px" }}>⚙️ Thiết lập trang</span>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Khổ giấy A4 & Hướng</span>
+                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
+                  <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Tổng số phần tử</span>
+                <p style={{ margin: "6px 0 0 0", fontSize: "13px", color: "#334155" }}>{content.elements.length} phần tử trên trang</p>
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
 
       {contextMenu && (
         <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => {
             const target = content.elements.find((item) => item.id === contextMenu.elementId);
             if (target) {
               const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
@@ -524,61 +639,30 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
             setContextMenu(null);
           }}>📋 Nhân bản (Duplicate)</button>
           {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
-            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
+            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
           )}
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red", fontSize: "13px" }} onClick={() => {
             setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
             setSelectedElementId(null);
             setContextMenu(null);
           }}>🗑 Xóa (Delete)</button>
-          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
-            e.stopPropagation();
-            setSelectedElementId(contextMenu.elementId);
-            setIsPropertiesOpen(true);
-            setContextMenu(null);
-          }}>⚙️ Thuộc tính (Properties)...</button>
         </div>
       )}
 
-      {isPropertiesOpen && selectedElement && (
-        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
-            <h3>Properties: {selectedElement.element_type}</h3>
-            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
-          </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
-          <hr />
-          {selectedElement.element_type === "Text" && (
-            <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
-              <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
-              </div>
-              <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select> Alignment
-              </div>
-            </>
-          )}
-          {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
-          )}
-          {selectedElement.element_type === "Image" && (
-            <div>
-              <ImageElement assetId={selectedElement.properties.asset_id} />
-              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
+      {showCloseModal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "24px", borderRadius: "12px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.2)" }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", fontWeight: 600, color: "#1e293b" }}>Lưu thay đổi trước khi thoát?</h3>
+            <p style={{ margin: "0 0 20px 0", fontSize: "13px", color: "#64748b", lineHeight: "1.5" }}>Tài liệu của bạn có các chỉnh sửa chưa được lưu lại. Bạn có muốn lưu trước khi đóng không?</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "#ffffff", border: "none", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={async () => {
+                const saved = await saveDocument();
+                if (saved) onClose();
+              }}>💾 Lưu và thoát</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }} onClick={onClose}>🗑 Không lưu</button>
+              <button style={{ width: "100%", padding: "10px", backgroundColor: "#ffffff", color: "#475569", border: "1px solid #e2e8f0", borderRadius: "8px", fontWeight: 500, cursor: "pointer", fontSize: "13px" }} onClick={() => setShowCloseModal(false)}>✕ Hủy</button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
