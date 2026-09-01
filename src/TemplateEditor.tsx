@@ -6,13 +6,12 @@ import { exportToPdf } from "./editor/pdfExporter";
 import { useToast } from "./components/Toast";
 
 interface TemplateEditorProps {
-  templateId?: number;
+  initialTemplate?: any;
   onClose: () => void;
 }
 
 type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
-// Image Asset Component
 function ImageElement({ assetId }: { assetId: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
@@ -23,16 +22,30 @@ function ImageElement({ assetId }: { assetId: number }) {
   return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
 }
 
-export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
+export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps) {
   const { showToast, ToastComponent } = useToast();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [content, setContent] = useState<DocumentContent>({
-    schema_version: "1.0",
-    page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-    elements: [],
+  const templateId = initialTemplate?.id;
+  const [name, setName] = useState(initialTemplate?.name || "New Template");
+  const [description, /* setDescription */] = useState(initialTemplate?.description || "");
+  const [content, setContent] = useState<DocumentContent>(() => {
+    if (initialTemplate?.metadata) {
+      try {
+        const parsed = JSON.parse(initialTemplate.metadata);
+        return {
+          schema_version: parsed.schema_version || "1.0",
+          page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+          elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+        };
+      } catch (e) {
+        console.error("Lỗi parse metadata template:", e);
+      }
+    }
+    return {
+      schema_version: "1.0",
+      page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+      elements: [],
+    };
   });
-  const [loading, setLoading] = useState<boolean>(true);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
@@ -43,65 +56,156 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
   const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
   const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
   const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+
   const canvasRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceImageElementId = useRef<string | null>(null);
 
-  useEffect(() => {
-    async function loadTemplate() {
-      try {
-        setLoading(true);
-        if (templateId) {
-          const templates: any[] = await invoke("get_templates");
-          const template = templates.find((t) => t.id === templateId);
-          if (template) {
-            setName(template.name);
-            setDescription(template.description || "");
-            const parsed = JSON.parse(template.metadata);
-            setContent({
-              schema_version: parsed.schema_version || "1.0",
-              page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-              elements: Array.isArray(parsed.elements) ? parsed.elements : [],
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Lỗi nạp Template:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadTemplate();
-  }, [templateId]);
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const nameRef = useRef(name);
+  nameRef.current = name;
+  const descRef = useRef(description);
+  descRef.current = description;
+  const selectedIdRef = useRef(selectedElementId);
+  selectedIdRef.current = selectedElementId;
+  const editingIdRef = useRef(editingElementId);
+  editingIdRef.current = editingElementId;
+  const clipboardRef = useRef<Element | null>(null);
+  const historyRef = useRef<DocumentContent[]>([]);
 
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
+  const saveSnapshot = () => {
+    historyRef.current.push(structuredClone(contentRef.current));
+    if (historyRef.current.length > 30) historyRef.current.shift();
+  };
+
+  const undo = () => {
+    if (historyRef.current.length > 0) {
+      const prev = historyRef.current.pop();
+      if (prev) {
+        setContent(prev);
+        setSelectedElementId(null);
+        showToast("Đã hoàn tác (Undo)", "success");
+      }
+    } else {
+      showToast("Không còn thao tác để hoàn tác", "error");
+    }
+  };
+
+  const copySelected = () => {
+    if (!selectedIdRef.current) return;
+    const target = contentRef.current.elements.find((el) => el.id === selectedIdRef.current);
+    if (target) {
+      clipboardRef.current = structuredClone(target);
+      showToast("📋 Đã sao chép phần tử!", "success");
+    }
+  };
+
+  const pasteClipboard = () => {
+    if (!clipboardRef.current) return;
+    saveSnapshot();
+    const source = clipboardRef.current;
+    const newEl: Element = {
+      ...structuredClone(source),
+      id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      position_x_mm: Math.round((source.position_x_mm + 5) * 10) / 10,
+      position_y_mm: Math.round((source.position_y_mm + 5) * 10) / 10,
+    };
+    clipboardRef.current = structuredClone(newEl);
+    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedElementId(newEl.id);
+    showToast("📋 Đã dán phần tử!", "success");
+  };
+
+  async function saveTemplateInternal() {
+    try {
+      if (templateId) {
+        await invoke("update_template", {
+          id: templateId,
+          name: nameRef.current,
+          description: descRef.current || null,
+          metadata: JSON.stringify(contentRef.current),
+        });
+        showToast("Đã lưu Template thành công!", "success");
+      } else {
+        await invoke("create_template", {
+          name: nameRef.current,
+          description: descRef.current || null,
+          metadata: JSON.stringify(contentRef.current),
+        });
+        showToast("Đã tạo Template mới thành công!", "success");
+        onClose();
+      }
+    } catch (err: any) {
+      showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+    }
+  }
+
+  async function saveAsNew() {
+    try {
+      await invoke("create_template", {
+        name: nameRef.current + " (Bản sao)",
+        description: descRef.current || null,
+        metadata: JSON.stringify(contentRef.current),
       });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
+      showToast("Đã lưu thành Template mới!", "success");
+      onClose();
+    } catch (err: any) {
+      showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+    }
+  }
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
     window.addEventListener("pointerdown", closeMenu);
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedElementId) {
-        const activeTag = document.activeElement?.tagName.toLowerCase();
-        if (activeTag === "input" || activeTag === "textarea") return;
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (isCtrl && key === "s") {
         e.preventDefault();
-        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== selectedElementId) }));
+        saveTemplateInternal();
+        return;
+      }
+
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (editingIdRef.current !== null || activeTag === "input" || activeTag === "textarea") return;
+
+      if (isCtrl && key === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (isCtrl && key === "c") { e.preventDefault(); copySelected(); return; }
+      if (isCtrl && key === "v") { e.preventDefault(); pasteClipboard(); return; }
+      if (isCtrl && key === "d") { e.preventDefault(); copySelected(); pasteClipboard(); return; }
+
+      if ((key === "delete" || key === "backspace") && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const idToDelete = selectedIdRef.current;
+        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
         setSelectedElementId(null);
         setIsPropertiesOpen(false);
+        showToast("🗑 Đã xóa phần tử!", "success");
+        return;
+      }
+
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key) && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const step = e.shiftKey ? 5 : 1;
+        const idToMove = selectedIdRef.current;
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((el) => {
+            if (el.id !== idToMove) return el;
+            let nx = el.position_x_mm, ny = el.position_y_mm;
+            if (key === "arrowup") ny = Math.max(0, ny - step);
+            else if (key === "arrowdown") ny += step;
+            else if (key === "arrowleft") nx = Math.max(0, nx - step);
+            else if (key === "arrowright") nx += step;
+            return { ...el, position_x_mm: Math.round(nx * 10) / 10, position_y_mm: Math.round(ny * 10) / 10 };
+          }),
+        }));
+        return;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -109,7 +213,7 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
       window.removeEventListener("pointerdown", closeMenu);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedElementId]);
+  }, []);
 
   useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
@@ -117,6 +221,13 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
       const rect = canvasRef.current.getBoundingClientRect();
 
       if (dragInfo && !resizeInfo) {
+        if (scrollContainerRef.current) {
+          const sRect = scrollContainerRef.current.getBoundingClientRect();
+          const threshold = 60, speed = 12;
+          if (e.clientY < sRect.top + threshold) scrollContainerRef.current.scrollTop -= speed;
+          else if (e.clientY > sRect.bottom - threshold) scrollContainerRef.current.scrollTop += speed;
+        }
+
         const curX = pxToMm(e.clientX - rect.left);
         const curY = pxToMm(e.clientY - rect.top);
         const newX = Math.max(0, curX - dragInfo.offsetX);
@@ -139,26 +250,14 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
 
         if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
         if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
-        if (handle.includes("w")) {
-          const possibleW = initW - deltaX;
-          if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; }
-        }
-        if (handle.includes("n")) {
-          const possibleH = initH - deltaY;
-          if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
-        }
+        if (handle.includes("w")) { const possibleW = initW - deltaX; if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; } }
+        if (handle.includes("n")) { const possibleH = initH - deltaY; if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; } }
 
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
-              ? {
-                  ...item,
-                  position_x_mm: Math.round(newX * 10) / 10,
-                  position_y_mm: Math.round(newY * 10) / 10,
-                  width_mm: Math.round(newW * 10) / 10,
-                  height_mm: Math.round(newH * 10) / 10,
-                }
+              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10, width_mm: Math.round(newW * 10) / 10, height_mm: Math.round(newH * 10) / 10 }
               : item
           ),
         }));
@@ -180,6 +279,23 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
       window.removeEventListener("pointerup", handlePointerUp);
     };
   }, [dragInfo, resizeInfo]);
+
+  useEffect(() => {
+    if (!propDragging) return;
+    const handleMove = (e: PointerEvent) => {
+      setPropPos({
+        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
+        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
+      });
+    };
+    const handleUp = () => setPropDragging(null);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [propDragging]);
 
   async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -204,6 +320,7 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
             }
           };
         } else {
+          saveSnapshot();
           const pageWidth = content.page?.width_mm || 210;
           const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
           const newEl: Element = {
@@ -234,20 +351,12 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
     }
   };
 
-  async function save(overwrite: boolean) {
-    if (templateId && overwrite) {
-      await invoke("update_template", { id: templateId, name, description, metadata: JSON.stringify(content) });
-    } else {
-      await invoke("create_template", { name, description: description || null, metadata: JSON.stringify(content) });
-    }
-    onClose();
-  }
-
   function updateElement(el: Element) {
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
   function addElement(type: ElementType) {
+    saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
     const newEl: Element = {
       id: Date.now().toString(),
@@ -265,31 +374,43 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
     setSelectedElementId(newEl.id);
   }
 
-  if (loading) return <div>⏳ Đang tải dữ liệu...</div>;
+  const toggleOrientation = () => {
+    saveSnapshot();
+    setContent((prev) => ({
+      ...prev,
+      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
+    }));
+  };
+
   const selectedElement = content.elements.find((e) => e.id === selectedElementId);
   const canvasWidth = mmToPx(content.page.width_mm);
   const canvasHeight = mmToPx(content.page.height_mm);
 
   return (
-    <div style={{ display: "flex", height: "100vh", position: "relative" }} onClick={() => { setSelectedElementId(null); setEditingElementId(null); }}>
-      <div style={{ flex: 1, padding: "10px", display: "flex", flexDirection: "column" }}>
-        <div>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Template Name" />
-          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" />
-          <button onClick={onClose}>Cancel</button>
-          <button onClick={() => save(true)}>Save</button>
-          <button onClick={() => save(false)}>Save As New</button>
-          <button onClick={handleExportPdf}>Export PDF</button>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+      {ToastComponent}
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên Template" />
         </div>
-        {ToastComponent}
-
-        <div style={{ margin: "10px 0", display: "flex", gap: "5px" }}>
-          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
+          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
+            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+          </button>
           <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
         </div>
+        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveTemplateInternal}>Save</button>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={saveAsNew}>Save As New</button>
+        </div>
+      </header>
 
-        <div ref={canvasRef} style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, border: "1px solid black", position: "relative", backgroundColor: "white", marginTop: "10px" }}>
+      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+        <div ref={canvasRef} style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
           {content.elements.map((el) => {
             const props = (el.properties as any) || {};
             const isEditing = editingElementId === el.id;
@@ -298,7 +419,12 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
             return (
               <div
                 key={el.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  (document.activeElement as HTMLElement)?.blur();
+                  setEditingElementId(null);
+                  setSelectedElementId(el.id); 
+                }}
                 onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
                 style={{
@@ -307,12 +433,18 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
                   top: `${mmToPx(el.position_y_mm)}px`,
                   width: `${mmToPx(el.width_mm)}px`,
                   height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "2px solid blue" : "1px dashed gray",
+                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
                   cursor: isEditing ? "text" : "move",
-                  touchAction: "none", userSelect: "none",
+                  touchAction: "none",
+                  userSelect: "none",
                 }}
+                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
                 onPointerDown={(e) => {
                   if (isEditing) return;
+                  saveSnapshot();
+                  (document.activeElement as HTMLElement)?.blur();
+                  setEditingElementId(null);
                   e.stopPropagation();
                   setSelectedElementId(el.id);
                   const rect = canvasRef.current?.getBoundingClientRect();
@@ -340,7 +472,7 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
                   if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
                   if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
                   if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
                 })}
               </div>
             );
@@ -383,22 +515,22 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
             <h3>Properties: {selectedElement.element_type}</h3>
             <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
           </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
+          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
+          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
           <hr />
           {selectedElement.element_type === "Text" && (
             <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } })} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } })} /> Font Size</div>
+              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
+              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
               <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } })} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } })} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } })} /> Underline
+                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
+                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
+                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
               </div>
               <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } })}>
+                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
                   <option value="left">Left</option>
                   <option value="center">Center</option>
                   <option value="right">Right</option>
@@ -407,7 +539,7 @@ export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
             </>
           )}
           {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } })} /></div>
+            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
           )}
           {selectedElement.element_type === "Image" && (
             <div>

@@ -139,34 +139,39 @@ fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, nam
 }
 
 #[tauri::command]
-fn update_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64, metadata: &str) -> Result<(), error::AppError> {
+fn update_document(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    id: i64, 
+    name: Option<&str>, 
+    metadata: &str
+) -> Result<(), error::AppError> {
     let user = auth.0.lock().unwrap().clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
     let conn = db.0.lock().unwrap();
 
     // Verify ownership
-    let doc: models::Document = conn.query_row(
-        "SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE id = ?1",
+    let doc_user_id: i64 = conn.query_row(
+        "SELECT user_id FROM documents WHERE id = ?1",
         [id],
-        |row| Ok(models::Document {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            source_template_id: row.get(2)?,
-            name: row.get(3)?,
-            metadata: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
-        })
-    )?;
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))?;
 
-    if doc.user_id != user.id {
+    if doc_user_id != user.id {
         return Err(error::AppError::AuthError("Access denied".into()));
     }
 
-    conn.execute(
-        "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-        (metadata, id),
-    )?;
+    if let Some(new_name) = name {
+        conn.execute(
+            "UPDATE documents SET name = ?1, metadata = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            (new_name, metadata, id),
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
+        )?;
+    }
     Ok(())
 }
 

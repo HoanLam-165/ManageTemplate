@@ -1560,147 +1560,6 @@ export function pxToMm(px: number): number {
 }
 </file>
 
-<file path="src/editor/pdfExporter.ts">
-import { jsPDF } from "jspdf";
-import { DocumentContent } from "../App";
-import { invoke } from "@tauri-apps/api/core";
-
-async function loadUnicodeFont(doc: jsPDF) {
-  try {
-    const fontUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf";
-    const fontBoldUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Medium.ttf";
-    
-    const [regularBuffer, boldBuffer] = await Promise.all([
-      fetch(fontUrl).then(res => res.arrayBuffer()),
-      fetch(fontBoldUrl).then(res => res.arrayBuffer()),
-    ]);
-
-    const toBase64 = (buf: ArrayBuffer) => {
-      let binary = "";
-      const bytes = new Uint8Array(buf);
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return window.btoa(binary);
-    };
-
-    doc.addFileToVFS("Roboto-Regular.ttf", toBase64(regularBuffer));
-    doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
-
-    doc.addFileToVFS("Roboto-Bold.ttf", toBase64(boldBuffer));
-    doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
-    
-    doc.setFont("Roboto", "normal");
-  } catch (err) {
-    console.warn("--> Không thể tải font Roboto, dùng font mặc định:", err);
-  }
-}
-
-export async function exportToPdf(content: DocumentContent, fileName: string) {
-  console.log("--> Bắt đầu khởi tạo PDF với nội dung:", content);
-  try {
-    if (!content || !content.page) {
-      throw new Error("Dữ liệu tài liệu không hợp lệ!");
-    }
-
-    const width = content.page.width_mm || 210;
-    const height = content.page.height_mm || 297;
-    const orientation = width > height ? "landscape" : "portrait";
-
-    const doc = new jsPDF({
-      unit: "mm",
-      format: [width, height],
-      orientation,
-    });
-
-    await loadUnicodeFont(doc);
-
-    // Cache to hold Base64 data for images during export
-    // const imageCache: Record<number, string> = {};
-
-    console.log(`--> Đang vẽ ${content.elements.length} phần tử lên PDF...`);
-
-    for (const el of content.elements) {
-      const x = el.position_x_mm || 0;
-      const y = el.position_y_mm || 0;
-      const w = el.width_mm || 40;
-      const h = el.height_mm || 10;
-      const props = (el.properties as any) || {};
-
-      switch (el.element_type) {
-        case "Text": {
-          doc.setFontSize(props.font_size || 12);
-          const isBold = props.is_bold;
-          doc.setFont("Roboto", isBold ? "bold" : "normal");
-          doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
-          break;
-        }
-        case "Number": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.value ?? 0), x, y, { baseline: "top" });
-          break;
-        }
-        case "Date": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.value || "DD/MM/YYYY"), x, y, { baseline: "top" });
-          break;
-        }
-        case "Select": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.selected || "-"), x, y, { baseline: "top" });
-          break;
-        }
-        case "Checkbox": {
-          doc.rect(x, y, Math.min(w, h, 6), Math.min(w, h, 6));
-          if (props.checked) {
-            doc.setFontSize(12);
-            doc.setFont("Roboto", "bold");
-            doc.text("X", x + 1.2, y + 1.2, { baseline: "top" });
-          }
-          break;
-        }
-        case "Image": {
-          const assetId = props.asset_id;
-          if (assetId) {
-            try {
-              const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
-              doc.addImage(dataUrl, "PNG", x, y, w, h);
-            } catch (err) {
-              console.warn("Không thể nhúng ảnh PDF #" + assetId, err);
-              doc.rect(x, y, w, h);
-              doc.text("[Image]", x + 2, y + 2, { baseline: "top" });
-            }
-          } else {
-            doc.rect(x, y, w, h);
-          }
-          break;
-        }
-      }
-    }
-
-    const safeName = (fileName || "document").replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf";
-
-    const blob = doc.output("blob");
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = safeName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    
-    console.log("--> Xuất PDF thành công:", safeName);
-  } catch (err: any) {
-    console.error("--> Lỗi khi xuất PDF:", err);
-    throw err;
-  }
-}
-</file>
-
 <file path="src/editor/presets.ts">
 import { Element, ElementType } from "../App";
 
@@ -2031,446 +1890,30 @@ export function AuthView({ onLogin }: AuthViewProps) {
   }
 
   return (
-    <div className="container">
-      <h1>{isRegister ? "Register" : "Login"}</h1>
-      <form onSubmit={handleSubmit}>
-        <input
-          placeholder="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button type="submit">{isRegister ? "Register" : "Login"}</button>
-      </form>
-      <button onClick={() => setIsRegister(!isRegister)}>
-        {isRegister ? "Back to Login" : "Need an account? Register"}
-      </button>
-      {error && <p style={{ color: "red" }}>{error}</p>}
-    </div>
-  );
-}
-</file>
-
-<file path="src/EditorView.tsx">
-import { useEffect, useState, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { mmToPx, pxToMm } from "./editor/coordinates";
-import { Element, ElementType, DocumentContent } from "./App";
-import { exportToPdf } from "./editor/pdfExporter";
-import { useToast } from "./components/Toast";
-
-interface EditorViewProps {
-  documentId: number;
-  onClose: () => void;
-}
-
-type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-
-// Image Asset Component
-function ImageElement({ assetId }: { assetId: number }) {
-  const [src, setSrc] = useState<string>("");
-  useEffect(() => {
-    if (assetId) {
-      invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
-    }
-  }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
-}
-
-export function EditorView({ documentId, onClose }: EditorViewProps) {
-  const { showToast, ToastComponent } = useToast();
-  const [content, setContent] = useState<DocumentContent>({
-    schema_version: "1.0",
-    page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-    elements: [],
-  });
-  const [loading, setLoading] = useState<boolean>(true);
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [editingElementId, setEditingElementId] = useState<string | null>(null);
-  const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
-  const [resizeInfo, setResizeInfo] = useState<{
-    elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
-  } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
-  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
-  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
-  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const replaceImageElementId = useRef<string | null>(null);
-
-  useEffect(() => {
-    async function loadDocument() {
-      try {
-        setLoading(true);
-        const docs: any[] = await invoke("get_documents");
-        const doc = docs.find((d) => Number(d.id) === Number(documentId));
-        if (doc && doc.metadata) {
-          const parsed = JSON.parse(doc.metadata);
-          setContent({
-            schema_version: parsed.schema_version || "1.0",
-            page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-            elements: Array.isArray(parsed.elements) ? parsed.elements : [],
-          });
-        }
-      } catch (err) {
-        console.error("Lỗi nạp Document:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadDocument();
-  }, [documentId]);
-
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
-      });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
-
-  useEffect(() => {
-    const closeMenu = () => setContextMenu(null);
-    window.addEventListener("pointerdown", closeMenu);
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedElementId) {
-        const activeTag = document.activeElement?.tagName.toLowerCase();
-        if (activeTag === "input" || activeTag === "textarea") return;
-        e.preventDefault();
-        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== selectedElementId) }));
-        setSelectedElementId(null);
-        setIsPropertiesOpen(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", closeMenu);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [selectedElementId]);
-
-  useEffect(() => {
-    const handlePointerMove = (e: PointerEvent) => {
-      if (!canvasRef.current) return;
-      const rect = canvasRef.current.getBoundingClientRect();
-
-      if (dragInfo && !resizeInfo) {
-        const curX = pxToMm(e.clientX - rect.left);
-        const curY = pxToMm(e.clientY - rect.top);
-        const newX = Math.max(0, curX - dragInfo.offsetX);
-        const newY = Math.max(0, curY - dragInfo.offsetY);
-
-        setContent((prev) => ({
-          ...prev,
-          elements: prev.elements.map((item) =>
-            item.id === dragInfo.elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
-              : item
-          ),
-        }));
-      } else if (resizeInfo) {
-        const deltaX = pxToMm(e.clientX - resizeInfo.startX);
-        const deltaY = pxToMm(e.clientY - resizeInfo.startY);
-        let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
-        let newX = initX, newY = initY, newW = initW, newH = initH;
-        const minW = 5, minH = 5;
-
-        if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
-        if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
-        if (handle.includes("w")) {
-          const possibleW = initW - deltaX;
-          if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; }
-        }
-        if (handle.includes("n")) {
-          const possibleH = initH - deltaY;
-          if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
-        }
-
-        setContent((prev) => ({
-          ...prev,
-          elements: prev.elements.map((item) =>
-            item.id === elementId
-              ? {
-                  ...item,
-                  position_x_mm: Math.round(newX * 10) / 10,
-                  position_y_mm: Math.round(newY * 10) / 10,
-                  width_mm: Math.round(newW * 10) / 10,
-                  height_mm: Math.round(newH * 10) / 10,
-                }
-              : item
-          ),
-        }));
-      }
-    };
-
-    const handlePointerUp = () => {
-      setDragInfo(null);
-      setResizeInfo(null);
-    };
-
-    if (dragInfo || resizeInfo) {
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
-    }
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [dragInfo, resizeInfo]);
-
-  const handleExportPdf = async () => {
-    showToast("Đang khởi tạo và xuất PDF...", "loading");
-    try {
-      await exportToPdf(content, `Document_${documentId}`);
-      showToast("Xuất PDF thành công!", "success");
-    } catch (err) {
-      showToast("Xuất PDF thất bại!", "error");
-    }
-  };
-
-  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const existingElementId = replaceImageElementId.current;
-    replaceImageElementId.current = null;
-    showToast("Đang tải ảnh lên...", "loading");
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result as string;
-      try {
-        const assetId: number = await invoke("upload_asset_base64", { dataUrl, fileName: `${Date.now()}_${file.name}` });
-        if (existingElementId) {
-          const img = new Image();
-          img.src = dataUrl;
-          img.onload = () => {
-            const el = content.elements.find((e) => e.id === existingElementId);
-            if (el) {
-              const newHeight = Math.round((el.width_mm * (img.naturalHeight / img.naturalWidth)) * 10) / 10;
-              updateElement({ ...el, properties: { ...el.properties, asset_id: assetId }, height_mm: newHeight });
-              showToast("Đã đổi ảnh thành công!", "success");
-            }
-          };
-        } else {
-          const pageWidth = content.page?.width_mm || 210;
-          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
-          const newEl: Element = {
-            id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
-            element_type: "Image",
-            position_x_mm: posX,
-            position_y_mm: 25,
-            width_mm: 40,
-            height_mm: 40,
-            properties: { type: "Image", asset_id: assetId },
-          };
-          setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
-          setSelectedElementId(newEl.id);
-          showToast("Đã thêm ảnh thành công!", "success");
-        }
-      } catch (err: any) { showToast("Thêm ảnh thất bại: " + (err.message || String(err)), "error"); }
-    };
-    reader.readAsDataURL(file);
-  }
-
-  function updateElement(el: Element) {
-    setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
-  }
-
-  function addElement(type: ElementType) {
-    const pageWidth = content.page?.width_mm || 210;
-    const newEl: Element = {
-      id: Date.now().toString(),
-      element_type: type,
-      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
-      position_y_mm: 25,
-      width_mm: 40,
-      height_mm: 10,
-      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
-        : type === "Select" ? { type: "Select", options: [], selected: null }
-        : type === "Checkbox" ? { type: "Checkbox", checked: false }
-        : { type: "Image", asset_id: 0 },
-    };
-    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
-    setSelectedElementId(newEl.id);
-  }
-
-  if (loading) return <div>⏳ Đang tải dữ liệu...</div>;
-  const selectedElement = content.elements.find((e) => e.id === selectedElementId);
-
-  return (
-    <div style={{ display: "flex", height: "100vh", position: "relative" }} onClick={() => { setSelectedElementId(null); setEditingElementId(null); }}>
-      {ToastComponent}
-      <div style={{ flex: 1, padding: "10px", display: "flex", flexDirection: "column" }}>
-        <div>
-          <button onClick={onClose}>Cancel</button>
-          <button onClick={() => invoke("update_document", { id: documentId, metadata: JSON.stringify(content) }).then(onClose)}>Save</button>
-          <button onClick={handleExportPdf}>Export PDF</button>
+    <div style={{ height: "100vh", display: "flex", justifyContent: "center", alignItems: "center", backgroundColor: "#f1f5f9" }}>
+      <div style={{ width: "380px", backgroundColor: "#ffffff", padding: "32px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}>
+        <div style={{ marginBottom: "24px", textAlign: "center" }}>
+          <h1 style={{ fontSize: "20px", fontWeight: "bold", margin: "0" }}>📑 Template Workspace</h1>
+          <p style={{ fontSize: "14px", color: "#64748b", margin: "8px 0 0" }}>Đăng nhập để quản lý và tái sử dụng biểu mẫu</p>
         </div>
-        <div style={{ margin: "10px 0", display: "flex", gap: "5px" }}>
-          {(["Text", "Select", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
-          <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
-        </div>
-
-        <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, border: "1px solid black", position: "relative", backgroundColor: "white", marginTop: "10px" }}>
-          {content.elements.map((el) => {
-            const props = (el.properties as any) || {};
-            const isEditing = editingElementId === el.id;
-            const isSelected = selectedElementId === el.id;
-
-            return (
-              <div
-                key={el.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
-                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
-                style={{
-                  position: "absolute",
-                  left: `${mmToPx(el.position_x_mm)}px`,
-                  top: `${mmToPx(el.position_y_mm)}px`,
-                  width: `${mmToPx(el.width_mm)}px`,
-                  height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "2px solid blue" : "1px dashed gray",
-                  cursor: isEditing ? "text" : "move",
-                  touchAction: "none",
-                  userSelect: "none",
-                }}
-                onPointerDown={(e) => {
-                  if (isEditing) return;
-                  e.stopPropagation();
-                  setSelectedElementId(el.id);
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
-                }}
-              >
-                {el.element_type === "Text" && (
-                  <textarea
-                    value={props.content || ""}
-                    onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
-                    onBlur={() => setEditingElementId(null)}
-                    style={{
-                      width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
-                      pointerEvents: isEditing ? "auto" : "none",
-                      fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
-                    }}
-                  />
-                )}
-                {el.element_type === "Select" && (
-                  <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", outline: "none" }}>
-                    <option value="">-- Chọn --</option>
-                    {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
-                )}
-                {el.element_type === "Checkbox" && (
-                  <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />
-                )}
-                {el.element_type === "Image" && <ImageElement assetId={props.asset_id} />}
-
-                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
-                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
-                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
-                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
-                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
-                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
-                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
-                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {contextMenu && (
-        <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
-            const target = content.elements.find((item) => item.id === contextMenu.elementId);
-            if (target) {
-              const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
-              setContent((prev) => ({ ...prev, elements: [...prev.elements, cloned] }));
-              setSelectedElementId(cloned.id);
-            }
-            setContextMenu(null);
-          }}>📋 Nhân bản (Duplicate)</button>
-          {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
-            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
-          )}
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
-            setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
-            setSelectedElementId(null);
-            setContextMenu(null);
-          }}>🗑 Xóa (Delete)</button>
-          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
-            e.stopPropagation();
-            setSelectedElementId(contextMenu.elementId);
-            setIsPropertiesOpen(true);
-            setContextMenu(null);
-          }}>⚙️ Thuộc tính (Properties)...</button>
-        </div>
-      )}
-
-      {isPropertiesOpen && selectedElement && (
-        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
-            <h3>Properties: {selectedElement.element_type}</h3>
-            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Username</label>
+            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
           </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
-          <hr />
-          {selectedElement.element_type === "Text" && (
-            <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } })} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } })} /> Font Size</div>
-              <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } })} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } })} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } })} /> Underline
-              </div>
-              <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } })}>
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select> Alignment
-              </div>
-            </>
-          )}
-          {selectedElement.element_type === "Select" && (
-            <div>Options (comma separated):<br /><textarea value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map((s: string) => s.trim()) } })} /></div>
-          )}
-          {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } })} /></div>
-          )}
-          {selectedElement.element_type === "Image" && (
-            <div>
-              <ImageElement assetId={selectedElement.properties.asset_id} />
-              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
-            </div>
-          )}
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Password</label>
+            <input style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", boxSizing: "border-box" }} type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <button style={{ width: "100%", padding: "10px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" }} type="submit">{isRegister ? "Đăng ký" : "Đăng nhập"}</button>
+        </form>
+        <div style={{ marginTop: "16px", textAlign: "center", fontSize: "14px" }}>
+          <button style={{ background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontWeight: "500" }} onClick={() => setIsRegister(!isRegister)}>
+            {isRegister ? "Đã có tài khoản? Đăng nhập" : "Chưa có tài khoản? Đăng ký"}
+          </button>
         </div>
-      )}
+        {error && <div style={{ marginTop: "20px", padding: "12px", backgroundColor: "#fef2f2", color: "#dc2626", borderRadius: "8px", fontSize: "14px", textAlign: "center" }}>{error}</div>}
+      </div>
     </div>
   );
 }
@@ -2494,8 +1937,9 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
+  const [searchTerm, setSearchTerm] = useState("");
   const [editingDocId, setEditingDocId] = useState<number | null>(null);
-  const [editingTemplateId, setEditingTemplateId] = useState<number | null | undefined>(null);
+  const [editingTemplate, setEditingTemplate] = useState<Template | "new" | null>(null);
 
   const handleExportPdf = async (d: any) => {
     showToast("Đang khởi tạo và xuất PDF...", "loading");
@@ -2535,47 +1979,71 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
     }
   }
 
+  const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
   if (editingDocId !== null) {
-    return <EditorView documentId={editingDocId} onClose={() => setEditingDocId(null)} />;
+    return <EditorView documentId={editingDocId} onClose={() => { setEditingDocId(null); loadData(); }} />;
   }
 
-  if (editingTemplateId !== null) {
-    return <TemplateEditor templateId={editingTemplateId === undefined ? undefined : editingTemplateId} onClose={() => { setEditingTemplateId(null); loadData(); }} />;
+  if (editingTemplate !== null) {
+    return (
+      <TemplateEditor
+        initialTemplate={editingTemplate === "new" ? undefined : editingTemplate}
+        onClose={() => { setEditingTemplate(null); loadData(); }}
+      />
+    );
   }
 
   return (
-    <div className="container">
-      <button onClick={onLogout}>Logout</button>
-      <div>
-        <button onClick={() => setActiveTab("templates")}>Templates</button>
-        <button onClick={() => setActiveTab("documents")}>Documents</button>
-      </div>
+    <div style={{ minHeight: "100vh", backgroundColor: "#f8fafc" }}>
+      <nav style={{ height: "60px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
+        <div style={{ fontWeight: "bold", fontSize: "18px" }}>📑 Template Workspace</div>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
+          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", boxShadow: activeTab === "templates" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("templates")}>Templates</button>
+          <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", cursor: "pointer", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", boxShadow: activeTab === "documents" ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }} onClick={() => setActiveTab("documents")}>Documents</button>
+        </div>
+        <button style={{ background: "none", border: "1px solid #e2e8f0", color: "#64748b", padding: "6px 12px", borderRadius: "6px", cursor: "pointer" }} onClick={onLogout}>Logout</button>
+      </nav>
 
-      {activeTab === "templates" ? (
-        <div>
-          <h2>Templates <button onClick={() => setEditingTemplateId(undefined)}>+</button></h2>
-          {templates.map((t: any) => (
-            <div key={t.id}>
-              {t.name} 
-              <button onClick={() => useTemplate(t.id)}>Use</button>
-              <button onClick={() => setEditingTemplateId(t.id)}>Edit</button>
-              <button style={{color: "red"}} onClick={() => handleDelete("template", t.id)}>Delete</button>
-            </div>
-          ))}
+      <div style={{ padding: "24px 32px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
+          <div style={{ display: "flex", gap: "12px" }}>
+            <input style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #e2e8f0" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "8px", cursor: "pointer" }} onClick={() => setEditingTemplate("new")}>+ Tạo Template mới</button>}
+          </div>
         </div>
-      ) : (
-        <div>
-          <h2>Documents</h2>
-          {documents.map((d: any) => (
-            <div key={d.id}>
-              {d.name} 
-              <button onClick={() => setEditingDocId(d.id)}>Edit</button>
-              <button style={{color: "red"}} onClick={() => handleDelete("document", d.id)}>Delete</button>
-              <button onClick={() => handleExportPdf(d)}>PDF</button>
-            </div>
-          ))}
-        </div>
-      )}
+
+        {filteredData.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "64px", border: "2px dashed #e2e8f0", borderRadius: "12px", color: "#64748b" }}>Chưa có tài liệu nào. Bắt đầu bằng cách tạo mới!</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "16px" }}>
+            {filteredData.map((item: any) => (
+              <div key={item.id} style={{ backgroundColor: "#ffffff", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "border 0.2s, box-shadow 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.border = "1px solid #3b82f6"; e.currentTarget.style.boxShadow = "0 4px 6px -1px rgba(0,0,0,0.1)"; }} onMouseLeave={(e) => { e.currentTarget.style.border = "1px solid #e2e8f0"; e.currentTarget.style.boxShadow = "none"; }}>
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: "600", marginBottom: "4px" }}>{item.name}</div>
+                  <div style={{ fontSize: "13px", color: "#64748b" }}>{item.description || "Không có mô tả"}</div>
+                </div>
+                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                  {activeTab === "templates" ? (
+                    <>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)}>Dùng</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingTemplate(item)}>Sửa</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)}>Xóa</button>
+                    </>
+                  ) : (
+                    <>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingDocId(item.id)}>Sửa</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)}>PDF</button>
+                      <button style={{ padding: "6px 12px", fontSize: "12px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)}>Xóa</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       {ToastComponent}
     </div>
   );
@@ -2592,435 +2060,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
-</file>
-
-<file path="src/TemplateEditor.tsx">
-import { useEffect, useState, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { mmToPx, pxToMm } from "./editor/coordinates";
-import { Element, ElementType, DocumentContent } from "./App";
-import { exportToPdf } from "./editor/pdfExporter";
-import { useToast } from "./components/Toast";
-
-interface TemplateEditorProps {
-  templateId?: number;
-  onClose: () => void;
-}
-
-type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-
-// Image Asset Component
-function ImageElement({ assetId }: { assetId: number }) {
-  const [src, setSrc] = useState<string>("");
-  useEffect(() => {
-    if (assetId) {
-      invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
-    }
-  }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
-}
-
-export function TemplateEditor({ templateId, onClose }: TemplateEditorProps) {
-  const { showToast, ToastComponent } = useToast();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [content, setContent] = useState<DocumentContent>({
-    schema_version: "1.0",
-    page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-    elements: [],
-  });
-  const [loading, setLoading] = useState<boolean>(true);
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [editingElementId, setEditingElementId] = useState<string | null>(null);
-  const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
-  const [resizeInfo, setResizeInfo] = useState<{
-    elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
-  } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
-  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
-  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
-  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const replaceImageElementId = useRef<string | null>(null);
-
-  useEffect(() => {
-    async function loadTemplate() {
-      try {
-        setLoading(true);
-        if (templateId) {
-          const templates: any[] = await invoke("get_templates");
-          const template = templates.find((t) => t.id === templateId);
-          if (template) {
-            setName(template.name);
-            setDescription(template.description || "");
-            const parsed = JSON.parse(template.metadata);
-            setContent({
-              schema_version: parsed.schema_version || "1.0",
-              page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
-              elements: Array.isArray(parsed.elements) ? parsed.elements : [],
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Lỗi nạp Template:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadTemplate();
-  }, [templateId]);
-
-  useEffect(() => {
-    if (!propDragging) return;
-    const handleMove = (e: PointerEvent) => {
-      setPropPos({
-        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
-        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
-      });
-    };
-    const handleUp = () => setPropDragging(null);
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    };
-  }, [propDragging]);
-
-  useEffect(() => {
-    const closeMenu = () => setContextMenu(null);
-    window.addEventListener("pointerdown", closeMenu);
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedElementId) {
-        const activeTag = document.activeElement?.tagName.toLowerCase();
-        if (activeTag === "input" || activeTag === "textarea") return;
-        e.preventDefault();
-        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== selectedElementId) }));
-        setSelectedElementId(null);
-        setIsPropertiesOpen(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", closeMenu);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [selectedElementId]);
-
-  useEffect(() => {
-    const handlePointerMove = (e: PointerEvent) => {
-      if (!canvasRef.current) return;
-      const rect = canvasRef.current.getBoundingClientRect();
-
-      if (dragInfo && !resizeInfo) {
-        const curX = pxToMm(e.clientX - rect.left);
-        const curY = pxToMm(e.clientY - rect.top);
-        const newX = Math.max(0, curX - dragInfo.offsetX);
-        const newY = Math.max(0, curY - dragInfo.offsetY);
-
-        setContent((prev) => ({
-          ...prev,
-          elements: prev.elements.map((item) =>
-            item.id === dragInfo.elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
-              : item
-          ),
-        }));
-      } else if (resizeInfo) {
-        const deltaX = pxToMm(e.clientX - resizeInfo.startX);
-        const deltaY = pxToMm(e.clientY - resizeInfo.startY);
-        let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
-        let newX = initX, newY = initY, newW = initW, newH = initH;
-        const minW = 5, minH = 5;
-
-        if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
-        if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
-        if (handle.includes("w")) {
-          const possibleW = initW - deltaX;
-          if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; }
-        }
-        if (handle.includes("n")) {
-          const possibleH = initH - deltaY;
-          if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
-        }
-
-        setContent((prev) => ({
-          ...prev,
-          elements: prev.elements.map((item) =>
-            item.id === elementId
-              ? {
-                  ...item,
-                  position_x_mm: Math.round(newX * 10) / 10,
-                  position_y_mm: Math.round(newY * 10) / 10,
-                  width_mm: Math.round(newW * 10) / 10,
-                  height_mm: Math.round(newH * 10) / 10,
-                }
-              : item
-          ),
-        }));
-      }
-    };
-
-    const handlePointerUp = () => {
-      setDragInfo(null);
-      setResizeInfo(null);
-    };
-
-    if (dragInfo || resizeInfo) {
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
-    }
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [dragInfo, resizeInfo]);
-
-  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const existingElementId = replaceImageElementId.current;
-    replaceImageElementId.current = null;
-    showToast("Đang tải ảnh lên...", "loading");
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result as string;
-      try {
-        const assetId: number = await invoke("upload_asset_base64", { dataUrl, fileName: `${Date.now()}_${file.name}` });
-        if (existingElementId) {
-          const img = new Image();
-          img.src = dataUrl;
-          img.onload = () => {
-            const el = content.elements.find((e) => e.id === existingElementId);
-            if (el) {
-              const newHeight = Math.round((el.width_mm * (img.naturalHeight / img.naturalWidth)) * 10) / 10;
-              updateElement({ ...el, properties: { ...el.properties, asset_id: assetId }, height_mm: newHeight });
-              showToast("Đã đổi ảnh thành công!", "success");
-            }
-          };
-        } else {
-          const pageWidth = content.page?.width_mm || 210;
-          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
-          const newEl: Element = {
-            id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
-            element_type: "Image",
-            position_x_mm: posX,
-            position_y_mm: 25,
-            width_mm: 40,
-            height_mm: 40,
-            properties: { type: "Image", asset_id: assetId },
-          };
-          setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
-          setSelectedElementId(newEl.id);
-          showToast("Đã thêm ảnh thành công!", "success");
-        }
-      } catch (err: any) { showToast("Thêm ảnh thất bại: " + (err.message || String(err)), "error"); }
-    };
-    reader.readAsDataURL(file);
-  }
-
-  const handleExportPdf = async () => {
-    showToast("Đang xuất PDF...", "loading");
-    try {
-      await exportToPdf(content, name);
-      showToast("Xuất PDF thành công!", "success");
-    } catch (err) {
-      showToast("Xuất PDF thất bại!", "error");
-    }
-  };
-
-  async function save(overwrite: boolean) {
-    if (templateId && overwrite) {
-      await invoke("update_template", { id: templateId, name, description, metadata: JSON.stringify(content) });
-    } else {
-      await invoke("create_template", { name, description: description || null, metadata: JSON.stringify(content) });
-    }
-    onClose();
-  }
-
-  function updateElement(el: Element) {
-    setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
-  }
-
-  function addElement(type: ElementType) {
-    const pageWidth = content.page?.width_mm || 210;
-    const newEl: Element = {
-      id: Date.now().toString(),
-      element_type: type,
-      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
-      position_y_mm: 25,
-      width_mm: 40,
-      height_mm: 10,
-      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
-        : type === "Select" ? { type: "Select", options: [], selected: null }
-        : type === "Checkbox" ? { type: "Checkbox", checked: false }
-        : { type: "Image", asset_id: 0 },
-    };
-    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
-    setSelectedElementId(newEl.id);
-  }
-
-  if (loading) return <div>⏳ Đang tải dữ liệu...</div>;
-  const selectedElement = content.elements.find((e) => e.id === selectedElementId);
-  const canvasWidth = mmToPx(content.page.width_mm);
-  const canvasHeight = mmToPx(content.page.height_mm);
-
-  return (
-    <div style={{ display: "flex", height: "100vh", position: "relative" }} onClick={() => { setSelectedElementId(null); setEditingElementId(null); }}>
-      <div style={{ flex: 1, padding: "10px", display: "flex", flexDirection: "column" }}>
-        <div>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Template Name" />
-          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" />
-          <button onClick={onClose}>Cancel</button>
-          <button onClick={() => save(true)}>Save</button>
-          <button onClick={() => save(false)}>Save As New</button>
-          <button onClick={handleExportPdf}>Export PDF</button>
-        </div>
-        {ToastComponent}
-
-        <div style={{ margin: "10px 0", display: "flex", gap: "5px" }}>
-          {(["Text", "Select", "Checkbox"] as ElementType[]).map((type) => <button key={type} onClick={() => addElement(type)}>Add {type}</button>)}
-          <button onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
-          <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
-        </div>
-
-        <div ref={canvasRef} style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, border: "1px solid black", position: "relative", backgroundColor: "white", marginTop: "10px" }}>
-          {content.elements.map((el) => {
-            const props = (el.properties as any) || {};
-            const isEditing = editingElementId === el.id;
-            const isSelected = selectedElementId === el.id;
-
-            return (
-              <div
-                key={el.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
-                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
-                style={{
-                  position: "absolute",
-                  left: `${mmToPx(el.position_x_mm)}px`,
-                  top: `${mmToPx(el.position_y_mm)}px`,
-                  width: `${mmToPx(el.width_mm)}px`,
-                  height: `${mmToPx(el.height_mm)}px`,
-                  border: isSelected ? "2px solid blue" : "1px dashed gray",
-                  cursor: isEditing ? "text" : "move",
-                  touchAction: "none", userSelect: "none",
-                }}
-                onPointerDown={(e) => {
-                  if (isEditing) return;
-                  e.stopPropagation();
-                  setSelectedElementId(el.id);
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
-                }}
-              >
-                {el.element_type === "Text" && (
-                  <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
-                )}
-                {el.element_type === "Select" && (
-                  <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", outline: "none" }}>
-                    <option value="">-- Chọn --</option>
-                    {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
-                )}
-                {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
-                {el.element_type === "Image" && <ImageElement assetId={props.asset_id} />}
-
-                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
-                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
-                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
-                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
-                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
-                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
-                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
-                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
-                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
-                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {contextMenu && (
-        <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
-            const target = content.elements.find((item) => item.id === contextMenu.elementId);
-            if (target) {
-              const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
-              setContent((prev) => ({ ...prev, elements: [...prev.elements, cloned] }));
-              setSelectedElementId(cloned.id);
-            }
-            setContextMenu(null);
-          }}>📋 Nhân bản (Duplicate)</button>
-          {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
-            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
-          )}
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
-            setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
-            setSelectedElementId(null);
-            setContextMenu(null);
-          }}>🗑 Xóa (Delete)</button>
-          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
-          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
-            e.stopPropagation();
-            setSelectedElementId(contextMenu.elementId);
-            setIsPropertiesOpen(true);
-            setContextMenu(null);
-          }}>⚙️ Thuộc tính (Properties)...</button>
-        </div>
-      )}
-
-      {isPropertiesOpen && selectedElement && (
-        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
-            <h3>Properties: {selectedElement.element_type}</h3>
-            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
-          </div>
-          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) })} /> </div>
-          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
-          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) })} /> </div>
-          <hr />
-          {selectedElement.element_type === "Text" && (
-            <>
-              <div><textarea value={selectedElement.properties.content} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } })} /></div>
-              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } })} /> Font Size</div>
-              <div>
-                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } })} /> Bold
-                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } })} /> Italic
-                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } })} /> Underline
-              </div>
-              <div>
-                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } })}>
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select> Alignment
-              </div>
-            </>
-          )}
-          {selectedElement.element_type === "Select" && (
-            <div>Options (comma separated):<br /><textarea value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map((s: string) => s.trim()) } })} /></div>
-          )}
-          {selectedElement.element_type === "Checkbox" && (
-            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } })} /></div>
-          )}
-          {selectedElement.element_type === "Image" && (
-            <div>
-              <ImageElement assetId={selectedElement.properties.asset_id} />
-              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 </file>
 
 <file path="src/vite-env.d.ts">
@@ -3096,29 +2135,6 @@ ALTER TABLE templates ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 
 ALTER TABLE documents ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE documents ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
-</file>
-
-<file path="src-tauri/src/assets.rs">
-use std::fs;
-use std::path::PathBuf;
-use tauri::AppHandle;
-use tauri::Manager;
-
-pub fn get_assets_dir(app_handle: &AppHandle) -> PathBuf {
-    let mut path = app_handle.path().app_data_dir().expect("Failed to get app data dir");
-    path.push("assets");
-    if !path.exists() {
-        let _ = fs::create_dir_all(&path);
-    }
-    path
-}
-
-pub fn save_asset(app_handle: &AppHandle, filename: &str, data: &[u8]) -> Result<PathBuf, std::io::Error> {
-    let assets_dir = get_assets_dir(app_handle);
-    let file_path = assets_dir.join(filename);
-    fs::write(&file_path, data)?;
-    Ok(file_path)
-}
 </file>
 
 <file path="src-tauri/src/db.rs">
@@ -3248,289 +2264,6 @@ impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
         AppError::ValidationError(err.to_string())
     }
-}
-</file>
-
-<file path="src-tauri/src/lib.rs">
-pub mod models;
-pub mod db;
-pub mod assets;
-pub mod error;
-pub mod repo;
-#[cfg(test)]
-mod tests;
-
-use tauri::Manager;
-use repo::{DbState};
-use std::sync::Mutex;
-use models::User;
-
-pub struct AuthState(pub Mutex<Option<User>>);
-
-// --- Auth Commands ---
-
-#[tauri::command]
-fn register(db: tauri::State<DbState>, username: &str, password: &str) -> Result<i64, error::AppError> {
-    let conn = db.0.lock().unwrap();
-    let user_id = repo::UserRepo::create(&conn, username, password)?;
-    repo::TemplateRepo::seed_for_user(&conn, user_id)?;
-    Ok(user_id)
-}
-
-#[tauri::command]
-fn login(
-    db: tauri::State<DbState>, 
-    auth: tauri::State<AuthState>, 
-    username: &str, 
-    password: &str
-) -> Result<User, error::AppError> {
-    let conn = db.0.lock().unwrap();
-    let user = repo::UserRepo::find_by_username(&conn, username)?
-        .ok_or(error::AppError::AuthError("User not found".into()))?;
-
-    bcrypt::verify(password, &user.password_hash)
-        .map_err(|_| error::AppError::AuthError("Verification failed".into()))?
-        .then_some(())
-        .ok_or(error::AppError::AuthError("Invalid password".into()))?;
-
-    let mut auth_state = auth.0.lock().unwrap();
-    *auth_state = Some(user.clone());
-
-    // Ensure seeded templates are populated/repaired
-    repo::TemplateRepo::seed_for_user(&conn, user.id)?;
-
-    Ok(user)
-}
-
-#[tauri::command]
-fn get_current_user(auth: tauri::State<AuthState>) -> Option<User> {
-    let auth_state = auth.0.lock().unwrap();
-    auth_state.clone()
-}
-
-#[tauri::command]
-fn logout(auth: tauri::State<AuthState>) {
-    let mut auth_state = auth.0.lock().unwrap();
-    *auth_state = None;
-}
-
-#[tauri::command]
-fn get_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::get_by_user(&conn, user.id)
-}
-
-#[tauri::command]
-fn create_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, description: Option<String>, metadata: &str) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    repo::TemplateRepo::create(&conn, user.id, name, description.as_deref(), metadata)
-}
-
-#[tauri::command]
-fn update_template(
-    db: tauri::State<DbState>, 
-    auth: tauri::State<AuthState>, 
-    id: i64, 
-    name: &str, 
-    description: Option<&str>, 
-    metadata: &str
-) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    // Verify ownership
-    let template: models::Template = conn.query_row(
-        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE id = ?1",
-        [id],
-        |row| Ok(models::Template {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            name: row.get(2)?,
-            description: row.get(3)?,
-            category_id: row.get(4)?,
-            thumbnail_asset_id: row.get(5)?,
-            metadata: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-        })
-    )?;
-
-    if template.user_id != user.id {
-        return Err(error::AppError::AuthError("Access denied".into()));
-    }
-
-    repo::TemplateRepo::update(&conn, id, name, description, metadata)
-}
-
-#[tauri::command]
-fn search_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>, query: &str) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::search_by_user(&conn, user.id, query)
-}
-
-#[tauri::command]
-fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Document>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::get_by_user(&conn, user.id)
-}
-
-#[tauri::command]
-fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
-}
-
-#[tauri::command]
-fn update_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64, metadata: &str) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
-    // Verify ownership
-    let doc: models::Document = conn.query_row(
-        "SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE id = ?1",
-        [id],
-        |row| Ok(models::Document {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            source_template_id: row.get(2)?,
-            name: row.get(3)?,
-            metadata: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
-        })
-    )?;
-
-    if doc.user_id != user.id {
-        return Err(error::AppError::AuthError("Access denied".into()));
-    }
-
-    conn.execute(
-        "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-        (metadata, id),
-    )?;
-    Ok(())
-}
-
-#[tauri::command]
-fn delete_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::TemplateRepo::delete(&conn, id, user.id)
-}
-
-#[tauri::command]
-fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    repo::DocumentRepo::delete(&conn, id, user.id)
-}
-
-#[tauri::command]
-fn upload_asset_base64(
-    db: tauri::State<DbState>,
-    auth: tauri::State<AuthState>,
-    app_handle: tauri::AppHandle,
-    data_url: String,
-    file_name: String,
-) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-
-    let base64_str = if let Some(idx) = data_url.find(',') {
-        &data_url[idx + 1..]
-    } else {
-        &data_url
-    };
-
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64_str)
-        .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
-
-    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
-        .map_err(|e| error::AppError::IoError(e.to_string()))?;
-
-    let path_str = saved_path.to_str().unwrap_or(&file_name);
-    let conn = db.0.lock().unwrap();
-    let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
-
-    Ok(asset_id)
-}
-
-#[tauri::command]
-fn get_asset_base64(
-    db: tauri::State<DbState>,
-    auth: tauri::State<AuthState>,
-    id: i64,
-) -> Result<String, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
-        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-    
-    let path: String = conn.query_row(
-        "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",
-        [id, user.id],
-        |row| row.get(0),
-    ).map_err(|_| error::AppError::DatabaseError("Asset not found".into()))?;
-
-    let bytes = std::fs::read(&path)
-        .map_err(|e| error::AppError::IoError(format!("Không đọc được file: {}", e)))?;
-
-    let ext = std::path::Path::new(&path)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
-
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => "image/png",
-    };
-
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:{};base64,{}", mime, encoded))
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let app_handle = app.handle();
-            let conn = db::init_db(Some(app_handle)).expect("Failed to initialize database");
-            
-            // Manage the DB connection and Auth state in Tauri
-            app.manage(DbState(Mutex::new(conn)));
-            app.manage(AuthState(Mutex::new(None)));
-            
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            register, login, logout, get_current_user, get_templates, create_template, 
-            update_template, search_templates, get_documents, create_document, 
-            update_document, delete_template, delete_document, 
-            upload_asset_base64, get_asset_base64
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
 </file>
 
@@ -3665,338 +2398,6 @@ pub enum ElementProperties {
     Select { options: Vec<String>, selected: Option<String> },
     Checkbox { checked: bool },
     Image { asset_id: i64 },
-}
-</file>
-
-<file path="src-tauri/src/repo.rs">
-use rusqlite::Connection;
-use crate::models::{User, Template, Document, DocumentContent, Element, ElementType, ElementProperties};
-use crate::error::AppError;
-use bcrypt::{hash, DEFAULT_COST};
-
-pub struct DbState(pub std::sync::Mutex<Connection>);
-
-pub struct UserRepo;
-
-impl UserRepo {
-    pub fn create(conn: &Connection, username: &str, password: &str) -> Result<i64, AppError> {
-        let hashed = hash(password, DEFAULT_COST)?;
-        conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
-            (username, hashed),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn find_by_username(conn: &Connection, username: &str) -> Result<Option<User>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, username, password_hash FROM users WHERE username = ?1")?;
-        let mut user_iter = stmt.query_map([username], |row| {
-            Ok(User {
-                id: row.get(0)?,
-                username: row.get(1)?,
-                password_hash: row.get(2)?,
-            })
-        })?;
-        
-        Ok(user_iter.next().map(|r| r.unwrap()))
-    }
-}
-
-pub struct TemplateRepo;
-
-impl TemplateRepo {
-    pub fn create(conn: &Connection, user_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<i64, AppError> {
-        if name != "Blank Template" {
-            let count = Self::count_for_user(conn, user_id)?;
-            if count >= 3 {
-                return Err(AppError::ValidationError("Template slot limit reached".into()));
-            }
-        }
-        conn.execute(
-            "INSERT INTO templates (user_id, name, description, metadata) VALUES (?1, ?2, ?3, ?4)",
-            (user_id, name, description, metadata),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Template>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1")?;
-        let template_iter = stmt.query_map([user_id], |row| {
-            Ok(Template {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                name: row.get(2)?,
-                description: row.get(3)?,
-                category_id: row.get(4)?,
-                thumbnail_asset_id: row.get(5)?,
-                metadata: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })?;
-        
-        let mut templates = Vec::new();
-        for template in template_iter {
-            templates.push(template?);
-        }
-        Ok(templates)
-    }
-
-    pub fn search_by_user(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Template>, AppError> {
-        let pattern = format!("%{}%", query);
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
-        let template_iter = stmt.query_map((user_id, pattern), |row| {
-            Ok(Template {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                name: row.get(2)?,
-                description: row.get(3)?,
-                category_id: row.get(4)?,
-                thumbnail_asset_id: row.get(5)?,
-                metadata: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })?;
-        
-        let mut templates = Vec::new();
-        for template in template_iter {
-            templates.push(template?);
-        }
-        Ok(templates)
-    }
-
-    pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64, AppError> {
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND name != 'Blank Template'",
-            [user_id],
-            |row| row.get(0),
-        )?;
-        Ok(count)
-    }
-
-    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
-        conn.execute(
-            "DELETE FROM templates WHERE id = ?1 AND user_id = ?2",
-            (id, user_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn update(conn: &Connection, template_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<(), AppError> {
-        conn.execute(
-            "UPDATE templates SET name = ?1, description = ?2, metadata = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
-            (name, description, metadata, template_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn seed_for_user(conn: &Connection, user_id: i64) -> Result<(), AppError> {
-        let templates = ["Test Case", "Bug Report", "Meeting Notes", "Blank Template"];
-        let default_content = DocumentContent::default_content();
-
-        for name in templates.iter() {
-            // Find existing
-            let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
-                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
-                (user_id, *name),
-                |row| Ok(Template {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    name: row.get(2)?,
-                    description: row.get(3)?,
-                    category_id: row.get(4)?,
-                    thumbnail_asset_id: row.get(5)?,
-                    metadata: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
-                })
-            );
-
-            match existing_template_res {
-                Ok(template) => {
-                    // Repair ONLY if name is "Bug Report", "Test Case", or "Meeting Notes",
-                    // and template was never modified (created_at == updated_at)
-                    if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
-                        && template.created_at == template.updated_at
-                    {
-                        if let Ok(content) = serde_json::from_str::<DocumentContent>(&template.metadata) {
-                            if content.elements.is_empty() {
-                                let populated = get_populated_content(name);
-                                let json = serde_json::to_string(&populated)?;
-                                Self::update(conn, template.id, &template.name, template.description.as_deref(), &json)?;
-                            }
-                        }
-                    }
-                },
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    let content = if *name == "Blank Template" {
-                        default_content.clone()
-                    } else {
-                        get_populated_content(name)
-                    };
-                    Self::create(conn, user_id, name, None, &serde_json::to_string(&content)?)?;
-                },
-                Err(e) => return Err(AppError::from(e)),
-            }
-        }
-        Ok(())
-    }
-}
-
-pub fn get_populated_content(name: &str) -> DocumentContent {
-    let mut content = DocumentContent::default_content();
-    match name {
-        "Bug Report" => {
-            content.elements = vec![
-                create_text_el("Tiêu đề lỗi", 10.0, 10.0),
-                create_text_el("Mô tả", 10.0, 25.0),
-                create_text_el("Các bước tái hiện", 10.0, 40.0),
-                create_text_el("Kết quả mong đợi", 10.0, 55.0),
-                create_text_el("Kết quả thực tế", 10.0, 70.0),
-                create_number_el("Độ nghiêm trọng (1-5)", 10.0, 85.0),
-            ];
-        },
-        "Test Case" => {
-            content.elements = vec![
-                create_text_el("Tên Test Case", 10.0, 10.0),
-                create_text_el("Điều kiện tiên quyết", 10.0, 25.0),
-                create_text_el("Các bước", 10.0, 40.0),
-                create_text_el("Kết quả mong đợi", 10.0, 55.0),
-                create_text_el("Kết quả thực tế", 10.0, 70.0),
-                create_text_el("Trạng thái", 10.0, 85.0),
-            ];
-        },
-        "Meeting Notes" => {
-            content.elements = vec![
-                create_text_el("Tiêu đề cuộc họp", 10.0, 10.0),
-                create_date_el("Ngày", 10.0, 25.0),
-                create_text_el("Người tham gia", 10.0, 40.0),
-                create_text_el("Nội dung", 10.0, 55.0),
-                create_text_el("Kết luận", 10.0, 70.0),
-            ];
-        },
-        _ => {},
-    }
-    content
-}
-
-fn create_text_el(content: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", content),
-        element_type: ElementType::Text,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Text {
-            content: content.into(),
-            font_family: "Arial".into(),
-            font_size: 12.0,
-            is_bold: true,
-            is_italic: false,
-            is_underline: false,
-            alignment: "left".into(),
-        }
-    }
-}
-
-fn create_number_el(label: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", label),
-        element_type: ElementType::Number,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Number { value: 0.0 }
-    }
-}
-
-fn create_date_el(label: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", label),
-        element_type: ElementType::Date,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Date { value: "".into(), format: "YYYY-MM-DD".into() }
-    }
-}
-
-
-pub struct DocumentRepo;
-
-impl DocumentRepo {
-    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
-        let content_to_store = if let Some(template_id) = source_template_id {
-            // Fetch template content
-            let template_metadata: String = conn.query_row(
-                "SELECT metadata FROM templates WHERE id = ?1",
-                [template_id],
-                |row| row.get(0),
-            )?;
-            
-            // Try parsing as DocumentContent first (handles modern/correct data)
-            if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
-                serde_json::to_string(&doc_content)
-                    .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
-            } else {
-                // If that fails, it's legacy data, copy as is
-                template_metadata
-            }
-        } else {
-            metadata.map(|s| s.to_string()).unwrap_or_else(|| serde_json::to_string(&DocumentContent::default_content()).unwrap())
-        };
-
-        conn.execute(
-            "INSERT INTO documents (user_id, source_template_id, name, metadata) VALUES (?1, ?2, ?3, ?4)",
-            (user_id, source_template_id, name, content_to_store),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Document>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE user_id = ?1")?;
-        let doc_iter = stmt.query_map([user_id], |row| {
-            Ok(Document {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                source_template_id: row.get(2)?,
-                name: row.get(3)?,
-                metadata: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })?;
-        
-        let mut docs = Vec::new();
-        for doc in doc_iter {
-            docs.push(doc?);
-        }
-        Ok(docs)
-    }
-
-    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
-        conn.execute(
-            "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
-            (id, user_id),
-        )?;
-        Ok(())
-    }
-}
-
-pub struct AssetRepo;
-
-impl AssetRepo {
-    pub fn create(conn: &Connection, user_id: i64, asset_type: &str, path: &str) -> Result<i64, AppError> {
-        conn.execute(
-            "INSERT INTO assets (user_id, type, path) VALUES (?1, ?2, ?3)",
-            (user_id, asset_type, path),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
 }
 </file>
 
@@ -4368,36 +2769,6 @@ mod tests {
 fn main() {
     tauri_build::build()
 }
-</file>
-
-<file path="src-tauri/Cargo.toml">
-[package]
-name = "tauri-app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "tauri_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
-
-[dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
-bcrypt = "0.15"
-base64 = "0.22"
 </file>
 
 <file path="src-tauri/tauri.conf.json">
@@ -5993,36 +4364,6 @@ At the end of every phase report:
 </html>
 </file>
 
-<file path="package.json">
-{
-  "name": "tauri-app",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri"
-  },
-  "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "jspdf": "^4.2.1",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4"
-  }
-}
-</file>
-
 <file path="README.md">
 # Tauri + React + Typescript
 
@@ -6150,6 +4491,1996 @@ export default defineConfig(async () => ({
     },
   },
 }));
+</file>
+
+<file path="src/editor/pdfExporter.ts">
+import { jsPDF } from "jspdf";
+import { DocumentContent } from "../App";
+import { invoke } from "@tauri-apps/api/core";
+
+async function loadUnicodeFont(doc: jsPDF) {
+  try {
+    const fontUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf";
+    const fontBoldUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Medium.ttf";
+    
+    const [regularBuffer, boldBuffer] = await Promise.all([
+      fetch(fontUrl).then(res => res.arrayBuffer()),
+      fetch(fontBoldUrl).then(res => res.arrayBuffer()),
+    ]);
+
+    const toBase64 = (buf: ArrayBuffer) => {
+      let binary = "";
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return window.btoa(binary);
+    };
+
+    doc.addFileToVFS("Roboto-Regular.ttf", toBase64(regularBuffer));
+    doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
+
+    doc.addFileToVFS("Roboto-Bold.ttf", toBase64(boldBuffer));
+    doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
+    
+    doc.setFont("Roboto", "normal");
+  } catch (err) {
+    console.warn("--> Không thể tải font Roboto, dùng font mặc định:", err);
+  }
+}
+
+export async function exportToPdf(content: DocumentContent, fileName: string) {
+  console.log("--> Bắt đầu khởi tạo PDF với nội dung:", content);
+  try {
+    if (!content || !content.page) {
+      throw new Error("Dữ liệu tài liệu không hợp lệ!");
+    }
+
+    const width = content.page.width_mm || 210;
+    const height = content.page.height_mm || 297;
+    const orientation = width > height ? "landscape" : "portrait";
+
+    const doc = new jsPDF({
+      unit: "mm",
+      format: [width, height],
+      orientation,
+    });
+
+    await loadUnicodeFont(doc);
+
+    // Cache to hold Base64 data for images during export
+    // const imageCache: Record<number, string> = {};
+
+    console.log(`--> Đang vẽ ${content.elements.length} phần tử lên PDF...`);
+
+    for (const el of content.elements) {
+      const x = el.position_x_mm || 0;
+      const y = el.position_y_mm || 0;
+      const w = el.width_mm || 40;
+      const h = el.height_mm || 10;
+      const props = (el.properties as any) || {};
+
+      switch (el.element_type) {
+        case "Text": {
+          doc.setFontSize(props.font_size || 12);
+          const isBold = props.is_bold;
+          doc.setFont("Roboto", isBold ? "bold" : "normal");
+          doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
+          break;
+        }
+        case "Number": {
+          doc.setFontSize(12);
+          doc.setFont("Roboto", "normal");
+          doc.text(String(props.value ?? 0), x, y, { baseline: "top" });
+          break;
+        }
+        case "Date": {
+          doc.setFontSize(12);
+          doc.setFont("Roboto", "normal");
+          doc.text(String(props.value || "DD/MM/YYYY"), x, y, { baseline: "top" });
+          break;
+        }
+        case "Select": {
+          doc.setFontSize(12);
+          doc.setFont("Roboto", "normal");
+          doc.text(String(props.selected || "-"), x, y, { baseline: "top" });
+          break;
+        }
+        case "Checkbox": {
+          doc.rect(x, y, Math.min(w, h, 6), Math.min(w, h, 6));
+          if (props.checked) {
+            doc.setFontSize(12);
+            doc.setFont("Roboto", "bold");
+            doc.text("X", x + 1.2, y + 1.2, { baseline: "top" });
+          }
+          break;
+        }
+        case "Image": {
+          const assetId = props.asset_id;
+          if (assetId) {
+            try {
+              const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
+              doc.addImage(dataUrl, "PNG", x, y, w, h);
+            } catch (err) {
+              console.warn("Không thể nhúng ảnh PDF #" + assetId, err);
+              doc.rect(x, y, w, h);
+              doc.text("[Image]", x + 2, y + 2, { baseline: "top" });
+            }
+          } else {
+            doc.rect(x, y, w, h);
+          }
+          break;
+        }
+      }
+    }
+
+    const safeName = (fileName || "document").replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf";
+
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = safeName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    console.log("--> Xuất PDF thành công:", safeName);
+  } catch (err: any) {
+    console.error("--> Lỗi khi xuất PDF:", err);
+    throw err;
+  }
+}
+</file>
+
+<file path="src-tauri/src/assets.rs">
+use std::fs;
+use std::path::PathBuf;
+use tauri::AppHandle;
+use tauri::Manager;
+
+pub fn get_assets_dir(app_handle: &AppHandle) -> PathBuf {
+    let mut path = app_handle.path().app_data_dir().expect("Failed to get app data dir");
+    path.push("assets");
+    if !path.exists() {
+        let _ = fs::create_dir_all(&path);
+    }
+    path
+}
+
+pub fn save_asset(app_handle: &AppHandle, filename: &str, data: &[u8]) -> Result<PathBuf, std::io::Error> {
+    let assets_dir = get_assets_dir(app_handle);
+    let file_path = assets_dir.join(filename);
+    fs::write(&file_path, data)?;
+    Ok(file_path)
+}
+</file>
+
+<file path="src-tauri/src/lib.rs">
+pub mod models;
+pub mod db;
+pub mod assets;
+pub mod error;
+pub mod repo;
+#[cfg(test)]
+mod tests;
+
+use tauri::Manager;
+use repo::{DbState};
+use std::sync::Mutex;
+use models::User;
+
+pub struct AuthState(pub Mutex<Option<User>>);
+
+// --- Auth Commands ---
+
+#[tauri::command]
+fn register(db: tauri::State<DbState>, username: &str, password: &str) -> Result<i64, error::AppError> {
+    let conn = db.0.lock().unwrap();
+    let user_id = repo::UserRepo::create(&conn, username, password)?;
+    repo::TemplateRepo::seed_for_user(&conn, user_id)?;
+    Ok(user_id)
+}
+
+#[tauri::command]
+fn login(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    username: &str, 
+    password: &str
+) -> Result<User, error::AppError> {
+    let conn = db.0.lock().unwrap();
+    let user = repo::UserRepo::find_by_username(&conn, username)?
+        .ok_or(error::AppError::AuthError("User not found".into()))?;
+
+    bcrypt::verify(password, &user.password_hash)
+        .map_err(|_| error::AppError::AuthError("Verification failed".into()))?
+        .then_some(())
+        .ok_or(error::AppError::AuthError("Invalid password".into()))?;
+
+    let mut auth_state = auth.0.lock().unwrap();
+    *auth_state = Some(user.clone());
+
+    // Ensure seeded templates are populated/repaired
+    repo::TemplateRepo::seed_for_user(&conn, user.id)?;
+
+    Ok(user)
+}
+
+#[tauri::command]
+fn get_current_user(auth: tauri::State<AuthState>) -> Option<User> {
+    let auth_state = auth.0.lock().unwrap();
+    auth_state.clone()
+}
+
+#[tauri::command]
+fn logout(auth: tauri::State<AuthState>) {
+    let mut auth_state = auth.0.lock().unwrap();
+    *auth_state = None;
+}
+
+#[tauri::command]
+fn get_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Template>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::get_by_user(&conn, user.id)
+}
+
+#[tauri::command]
+fn create_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, description: Option<String>, metadata: &str) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    repo::TemplateRepo::create(&conn, user.id, name, description.as_deref(), metadata)
+}
+
+#[tauri::command]
+fn update_template(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    id: i64, 
+    name: &str, 
+    description: Option<&str>, 
+    metadata: &str
+) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    // Verify ownership
+    let template: models::Template = conn.query_row(
+        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE id = ?1",
+        [id],
+        |row| Ok(models::Template {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            category_id: row.get(4)?,
+            thumbnail_asset_id: row.get(5)?,
+            metadata: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    )?;
+
+    if template.user_id != user.id {
+        return Err(error::AppError::AuthError("Access denied".into()));
+    }
+
+    repo::TemplateRepo::update(&conn, id, name, description, metadata)
+}
+
+#[tauri::command]
+fn search_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>, query: &str) -> Result<Vec<models::Template>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::search_by_user(&conn, user.id, query)
+}
+
+#[tauri::command]
+fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Document>, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::get_by_user(&conn, user.id)
+}
+
+#[tauri::command]
+fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
+}
+
+#[tauri::command]
+fn update_document(
+    db: tauri::State<DbState>, 
+    auth: tauri::State<AuthState>, 
+    id: i64, 
+    name: Option<&str>, 
+    metadata: &str
+) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+
+    // Verify ownership
+    let doc_user_id: i64 = conn.query_row(
+        "SELECT user_id FROM documents WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))?;
+
+    if doc_user_id != user.id {
+        return Err(error::AppError::AuthError("Access denied".into()));
+    }
+
+    if let Some(new_name) = name {
+        conn.execute(
+            "UPDATE documents SET name = ?1, metadata = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            (new_name, metadata, id),
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::TemplateRepo::delete(&conn, id, user.id)
+}
+
+#[tauri::command]
+fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    repo::DocumentRepo::delete(&conn, id, user.id)
+}
+
+#[tauri::command]
+fn upload_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    app_handle: tauri::AppHandle,
+    data_url: String,
+    file_name: String,
+) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+
+    let base64_str = if let Some(idx) = data_url.find(',') {
+        &data_url[idx + 1..]
+    } else {
+        &data_url
+    };
+
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_str)
+        .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
+
+    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
+        .map_err(|e| error::AppError::IoError(e.to_string()))?;
+
+    let path_str = saved_path.to_str().unwrap_or(&file_name);
+    let conn = db.0.lock().unwrap();
+    let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
+
+    Ok(asset_id)
+}
+
+#[tauri::command]
+fn get_asset_base64(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    id: i64,
+) -> Result<String, error::AppError> {
+    let user = auth.0.lock().unwrap().clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().unwrap();
+    
+    let path: String = conn.query_row(
+        "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",
+        [id, user.id],
+        |row| row.get(0),
+    ).map_err(|_| error::AppError::DatabaseError("Asset not found".into()))?;
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| error::AppError::IoError(format!("Không đọc được file: {}", e)))?;
+
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    };
+
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let app_handle = app.handle();
+            let conn = db::init_db(Some(app_handle)).expect("Failed to initialize database");
+            
+            // Manage the DB connection and Auth state in Tauri
+            app.manage(DbState(Mutex::new(conn)));
+            app.manage(AuthState(Mutex::new(None)));
+            
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            register, login, logout, get_current_user, get_templates, create_template, 
+            update_template, search_templates, get_documents, create_document, 
+            update_document, delete_template, delete_document, 
+            upload_asset_base64, get_asset_base64
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+</file>
+
+<file path="src-tauri/src/repo.rs">
+use rusqlite::Connection;
+use crate::models::{User, Template, Document, DocumentContent, Element, ElementType, ElementProperties};
+use crate::error::AppError;
+use bcrypt::{hash, DEFAULT_COST};
+
+pub struct DbState(pub std::sync::Mutex<Connection>);
+
+pub struct UserRepo;
+
+impl UserRepo {
+    pub fn create(conn: &Connection, username: &str, password: &str) -> Result<i64, AppError> {
+        let hashed = hash(password, DEFAULT_COST)?;
+        conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
+            (username, hashed),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn find_by_username(conn: &Connection, username: &str) -> Result<Option<User>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, username, password_hash FROM users WHERE username = ?1")?;
+        let mut user_iter = stmt.query_map([username], |row| {
+            Ok(User {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                password_hash: row.get(2)?,
+            })
+        })?;
+        
+        Ok(user_iter.next().map(|r| r.unwrap()))
+    }
+}
+
+pub struct TemplateRepo;
+
+impl TemplateRepo {
+    pub fn create(conn: &Connection, user_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<i64, AppError> {
+        if name != "Blank Template" {
+            let count = Self::count_for_user(conn, user_id)?;
+            if count >= 3 {
+                return Err(AppError::ValidationError("Template slot limit reached".into()));
+            }
+        }
+        conn.execute(
+            "INSERT INTO templates (user_id, name, description, metadata) VALUES (?1, ?2, ?3, ?4)",
+            (user_id, name, description, metadata),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Template>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1")?;
+        let template_iter = stmt.query_map([user_id], |row| {
+            Ok(Template {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                category_id: row.get(4)?,
+                thumbnail_asset_id: row.get(5)?,
+                metadata: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        
+        let mut templates = Vec::new();
+        for template in template_iter {
+            templates.push(template?);
+        }
+        Ok(templates)
+    }
+
+    pub fn search_by_user(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Template>, AppError> {
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
+        let template_iter = stmt.query_map((user_id, pattern), |row| {
+            Ok(Template {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                category_id: row.get(4)?,
+                thumbnail_asset_id: row.get(5)?,
+                metadata: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        
+        let mut templates = Vec::new();
+        for template in template_iter {
+            templates.push(template?);
+        }
+        Ok(templates)
+    }
+
+    pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64, AppError> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND name != 'Blank Template'",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
+        conn.execute(
+            "DELETE FROM templates WHERE id = ?1 AND user_id = ?2",
+            (id, user_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update(conn: &Connection, template_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<(), AppError> {
+        conn.execute(
+            "UPDATE templates SET name = ?1, description = ?2, metadata = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+            (name, description, metadata, template_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn seed_for_user(conn: &Connection, user_id: i64) -> Result<(), AppError> {
+        let templates = ["Test Case", "Bug Report", "Meeting Notes", "Blank Template"];
+        let default_content = DocumentContent::default_content();
+
+        for name in templates.iter() {
+            // Find existing
+            let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
+                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
+                (user_id, *name),
+                |row| Ok(Template {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                    category_id: row.get(4)?,
+                    thumbnail_asset_id: row.get(5)?,
+                    metadata: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            );
+
+            match existing_template_res {
+                Ok(template) => {
+                    // Repair ONLY if name is "Bug Report", "Test Case", or "Meeting Notes",
+                    // and template was never modified (created_at == updated_at)
+                    if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
+                        && template.created_at == template.updated_at
+                    {
+                        if let Ok(content) = serde_json::from_str::<DocumentContent>(&template.metadata) {
+                            if content.elements.is_empty() {
+                                let populated = get_populated_content(name);
+                                let json = serde_json::to_string(&populated)?;
+                                Self::update(conn, template.id, &template.name, template.description.as_deref(), &json)?;
+                            }
+                        }
+                    }
+                },
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    let content = if *name == "Blank Template" {
+                        default_content.clone()
+                    } else {
+                        get_populated_content(name)
+                    };
+                    Self::create(conn, user_id, name, None, &serde_json::to_string(&content)?)?;
+                },
+                Err(e) => return Err(AppError::from(e)),
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn get_populated_content(name: &str) -> DocumentContent {
+    let mut content = DocumentContent::default_content();
+    match name {
+        "Bug Report" => {
+            content.elements = vec![
+                create_text_el("Tiêu đề lỗi", 10.0, 10.0),
+                create_text_el("Mô tả", 10.0, 25.0),
+                create_text_el("Các bước tái hiện", 10.0, 40.0),
+                create_text_el("Kết quả mong đợi", 10.0, 55.0),
+                create_text_el("Kết quả thực tế", 10.0, 70.0),
+                create_number_el("Độ nghiêm trọng (1-5)", 10.0, 85.0),
+            ];
+        },
+        "Test Case" => {
+            content.elements = vec![
+                create_text_el("Tên Test Case", 10.0, 10.0),
+                create_text_el("Điều kiện tiên quyết", 10.0, 25.0),
+                create_text_el("Các bước", 10.0, 40.0),
+                create_text_el("Kết quả mong đợi", 10.0, 55.0),
+                create_text_el("Kết quả thực tế", 10.0, 70.0),
+                create_text_el("Trạng thái", 10.0, 85.0),
+            ];
+        },
+        "Meeting Notes" => {
+            content.elements = vec![
+                create_text_el("Tiêu đề cuộc họp", 10.0, 10.0),
+                create_date_el("Ngày", 10.0, 25.0),
+                create_text_el("Người tham gia", 10.0, 40.0),
+                create_text_el("Nội dung", 10.0, 55.0),
+                create_text_el("Kết luận", 10.0, 70.0),
+            ];
+        },
+        _ => {},
+    }
+    content
+}
+
+fn create_text_el(content: &str, x: f64, y: f64) -> Element {
+    Element {
+        id: format!("el-seed-{}", content),
+        element_type: ElementType::Text,
+        position_x_mm: x,
+        position_y_mm: y,
+        width_mm: 100.0,
+        height_mm: 10.0,
+        properties: ElementProperties::Text {
+            content: content.into(),
+            font_family: "Arial".into(),
+            font_size: 12.0,
+            is_bold: true,
+            is_italic: false,
+            is_underline: false,
+            alignment: "left".into(),
+        }
+    }
+}
+
+fn create_number_el(label: &str, x: f64, y: f64) -> Element {
+    Element {
+        id: format!("el-seed-{}", label),
+        element_type: ElementType::Number,
+        position_x_mm: x,
+        position_y_mm: y,
+        width_mm: 100.0,
+        height_mm: 10.0,
+        properties: ElementProperties::Number { value: 0.0 }
+    }
+}
+
+fn create_date_el(label: &str, x: f64, y: f64) -> Element {
+    Element {
+        id: format!("el-seed-{}", label),
+        element_type: ElementType::Date,
+        position_x_mm: x,
+        position_y_mm: y,
+        width_mm: 100.0,
+        height_mm: 10.0,
+        properties: ElementProperties::Date { value: "".into(), format: "YYYY-MM-DD".into() }
+    }
+}
+
+
+pub struct DocumentRepo;
+
+impl DocumentRepo {
+    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
+        let content_to_store = if let Some(template_id) = source_template_id {
+            // Fetch template content
+            let template_metadata: String = conn.query_row(
+                "SELECT metadata FROM templates WHERE id = ?1",
+                [template_id],
+                |row| row.get(0),
+            )?;
+            
+            // Try parsing as DocumentContent first (handles modern/correct data)
+            if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
+                serde_json::to_string(&doc_content)
+                    .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
+            } else {
+                // If that fails, it's legacy data, copy as is
+                template_metadata
+            }
+        } else {
+            metadata.map(|s| s.to_string()).unwrap_or_else(|| serde_json::to_string(&DocumentContent::default_content()).unwrap())
+        };
+
+        conn.execute(
+            "INSERT INTO documents (user_id, source_template_id, name, metadata) VALUES (?1, ?2, ?3, ?4)",
+            (user_id, source_template_id, name, content_to_store),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Document>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE user_id = ?1")?;
+        let doc_iter = stmt.query_map([user_id], |row| {
+            Ok(Document {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_template_id: row.get(2)?,
+                name: row.get(3)?,
+                metadata: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        
+        let mut docs = Vec::new();
+        for doc in doc_iter {
+            docs.push(doc?);
+        }
+        Ok(docs)
+    }
+
+    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
+        conn.execute(
+            "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
+            (id, user_id),
+        )?;
+        Ok(())
+    }
+}
+
+pub struct AssetRepo;
+
+impl AssetRepo {
+    pub fn create(conn: &Connection, user_id: i64, asset_type: &str, path: &str) -> Result<i64, AppError> {
+        conn.execute(
+            "INSERT INTO assets (user_id, type, path) VALUES (?1, ?2, ?3)",
+            (user_id, asset_type, path),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+</file>
+
+<file path="src-tauri/Cargo.toml">
+[package]
+name = "tauri-app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+bcrypt = "0.15"
+base64 = "0.22"
+</file>
+
+<file path="package.json">
+{
+  "name": "tauri-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "jspdf": "^4.2.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}
+</file>
+
+<file path="src/EditorView.tsx">
+import { useEffect, useState, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { mmToPx, pxToMm } from "./editor/coordinates";
+import { Element, ElementType, DocumentContent } from "./App";
+import { exportToPdf } from "./editor/pdfExporter";
+import { useToast } from "./components/Toast";
+
+interface EditorViewProps {
+  documentId: number;
+  onClose: () => void;
+}
+
+type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+function ImageElement({ assetId }: { assetId: number }) {
+  const [src, setSrc] = useState<string>("");
+  useEffect(() => {
+    if (assetId) {
+      invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
+    }
+  }, [assetId]);
+  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
+}
+
+export function EditorView({ documentId, onClose }: EditorViewProps) {
+  const { showToast, ToastComponent } = useToast();
+  const [content, setContent] = useState<DocumentContent>({
+    schema_version: "1.0",
+    page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+    elements: [],
+  });
+  const [docName, setDocName] = useState<string>("Untitled Document");
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
+  const [resizeInfo, setResizeInfo] = useState<{
+    elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
+  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
+  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
+  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
+  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceImageElementId = useRef<string | null>(null);
+
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const docNameRef = useRef(docName);
+  docNameRef.current = docName;
+  const selectedIdRef = useRef(selectedElementId);
+  selectedIdRef.current = selectedElementId;
+  const editingIdRef = useRef(editingElementId);
+  editingIdRef.current = editingElementId;
+  const clipboardRef = useRef<Element | null>(null);
+  const historyRef = useRef<DocumentContent[]>([]);
+
+  useEffect(() => {
+    async function loadDocument() {
+      try {
+        setLoading(true);
+        const docs: any[] = await invoke("get_documents");
+        const doc = docs.find((d) => Number(d.id) === Number(documentId));
+        if (doc) {
+          if (doc.name) {
+            setDocName(doc.name);
+            docNameRef.current = doc.name;
+          }
+          if (doc.metadata) {
+            const parsed = JSON.parse(doc.metadata);
+            setContent({
+              schema_version: parsed.schema_version || "1.0",
+              page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+              elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Lỗi nạp Document:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadDocument();
+  }, [documentId]);
+
+  const saveSnapshot = () => {
+    historyRef.current.push(structuredClone(contentRef.current));
+    if (historyRef.current.length > 30) historyRef.current.shift();
+  };
+
+  const undo = () => {
+    if (historyRef.current.length > 0) {
+      const prev = historyRef.current.pop();
+      if (prev) {
+        setContent(prev);
+        setSelectedElementId(null);
+        showToast("Đã hoàn tác (Undo)", "success");
+      }
+    } else {
+      showToast("Không còn thao tác để hoàn tác", "error");
+    }
+  };
+
+  const copySelected = () => {
+    if (!selectedIdRef.current) return;
+    const target = contentRef.current.elements.find((el) => el.id === selectedIdRef.current);
+    if (target) {
+      clipboardRef.current = structuredClone(target);
+      showToast("📋 Đã sao chép phần tử!", "success");
+    }
+  };
+
+  const pasteClipboard = () => {
+    if (!clipboardRef.current) return;
+    saveSnapshot();
+    const source = clipboardRef.current;
+    const newEl: Element = {
+      ...structuredClone(source),
+      id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      position_x_mm: Math.round((source.position_x_mm + 5) * 10) / 10,
+      position_y_mm: Math.round((source.position_y_mm + 5) * 10) / 10,
+    };
+    clipboardRef.current = structuredClone(newEl);
+    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedElementId(newEl.id);
+    showToast("📋 Đã dán phần tử!", "success");
+  };
+
+  const saveDocument = async () => {
+    try {
+      await invoke("update_document", {
+        id: documentId,
+        name: docNameRef.current,
+        metadata: JSON.stringify(contentRef.current),
+      });
+      showToast("Đã lưu tài liệu thành công!", "success");
+    } catch (err: any) {
+      showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+    }
+  };
+
+  useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener("pointerdown", closeMenu);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (isCtrl && key === "s") {
+        e.preventDefault();
+        saveDocument();
+        return;
+      }
+
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (editingIdRef.current !== null || activeTag === "input" || activeTag === "textarea") {
+        return;
+      }
+
+      if (isCtrl && key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      if (isCtrl && key === "c") {
+        e.preventDefault();
+        copySelected();
+        return;
+      }
+
+      if (isCtrl && key === "v") {
+        e.preventDefault();
+        pasteClipboard();
+        return;
+      }
+
+      if (isCtrl && key === "d") {
+        e.preventDefault();
+        copySelected();
+        pasteClipboard();
+        return;
+      }
+
+      if ((key === "delete" || key === "backspace") && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const idToDelete = selectedIdRef.current;
+        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
+        setSelectedElementId(null);
+        setIsPropertiesOpen(false);
+        showToast("🗑 Đã xóa phần tử!", "success");
+        return;
+      }
+
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key) && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const step = e.shiftKey ? 5 : 1;
+        const idToMove = selectedIdRef.current;
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((el) => {
+            if (el.id !== idToMove) return el;
+            let nx = el.position_x_mm;
+            let ny = el.position_y_mm;
+            if (key === "arrowup") ny = Math.max(0, ny - step);
+            if (key === "arrowdown") ny += step;
+            if (key === "arrowleft") nx = Math.max(0, nx - step);
+            if (key === "arrowright") nx += step;
+            return { ...el, position_x_mm: Math.round(nx * 10) / 10, position_y_mm: Math.round(ny * 10) / 10 };
+          }),
+        }));
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+
+      if (dragInfo && !resizeInfo) {
+        if (scrollContainerRef.current) {
+          const sRect = scrollContainerRef.current.getBoundingClientRect();
+          const threshold = 60;
+          const speed = 12;
+          if (e.clientY < sRect.top + threshold) {
+            scrollContainerRef.current.scrollTop -= speed;
+          } else if (e.clientY > sRect.bottom - threshold) {
+            scrollContainerRef.current.scrollTop += speed;
+          }
+        }
+
+        const curX = pxToMm(e.clientX - rect.left);
+        const curY = pxToMm(e.clientY - rect.top);
+        const newX = Math.max(0, curX - dragInfo.offsetX);
+        const newY = Math.max(0, curY - dragInfo.offsetY);
+
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((item) =>
+            item.id === dragInfo.elementId
+              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
+              : item
+          ),
+        }));
+      } else if (resizeInfo) {
+        const deltaX = pxToMm(e.clientX - resizeInfo.startX);
+        const deltaY = pxToMm(e.clientY - resizeInfo.startY);
+        let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
+        let newX = initX, newY = initY, newW = initW, newH = initH;
+        const minW = 5, minH = 5;
+
+        if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
+        if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
+        if (handle.includes("w")) {
+          const possibleW = initW - deltaX;
+          if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; }
+        }
+        if (handle.includes("n")) {
+          const possibleH = initH - deltaY;
+          if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
+        }
+
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((item) =>
+            item.id === elementId
+              ? {
+                  ...item,
+                  position_x_mm: Math.round(newX * 10) / 10,
+                  position_y_mm: Math.round(newY * 10) / 10,
+                  width_mm: Math.round(newW * 10) / 10,
+                  height_mm: Math.round(newH * 10) / 10,
+                }
+              : item
+          ),
+        }));
+      }
+    };
+
+    const handlePointerUp = () => {
+      setDragInfo(null);
+      setResizeInfo(null);
+    };
+
+    if (dragInfo || resizeInfo) {
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+    }
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [dragInfo, resizeInfo]);
+
+  useEffect(() => {
+    if (!propDragging) return;
+    const handleMove = (e: PointerEvent) => {
+      setPropPos({
+        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
+        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
+      });
+    };
+    const handleUp = () => setPropDragging(null);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [propDragging]);
+
+  const handleExportPdf = async () => {
+    showToast("Đang khởi tạo và xuất PDF...", "loading");
+    try {
+      await exportToPdf(content, docName);
+      showToast("Xuất PDF thành công!", "success");
+    } catch (err) {
+      showToast("Xuất PDF thất bại!", "error");
+    }
+  };
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const existingElementId = replaceImageElementId.current;
+    replaceImageElementId.current = null;
+    showToast("Đang tải ảnh lên...", "loading");
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      try {
+        const assetId: number = await invoke("upload_asset_base64", { dataUrl, fileName: `${Date.now()}_${file.name}` });
+        if (existingElementId) {
+          const img = new Image();
+          img.src = dataUrl;
+          img.onload = () => {
+            const el = content.elements.find((e) => e.id === existingElementId);
+            if (el) {
+              const newHeight = Math.round((el.width_mm * (img.naturalHeight / img.naturalWidth)) * 10) / 10;
+              updateElement({ ...el, properties: { ...el.properties, asset_id: assetId }, height_mm: newHeight });
+              showToast("Đã đổi ảnh thành công!", "success");
+            }
+          };
+        } else {
+          saveSnapshot();
+          const pageWidth = content.page?.width_mm || 210;
+          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
+          const newEl: Element = {
+            id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
+            element_type: "Image",
+            position_x_mm: posX,
+            position_y_mm: 25,
+            width_mm: 40,
+            height_mm: 40,
+            properties: { type: "Image", asset_id: assetId },
+          };
+          setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+          setSelectedElementId(newEl.id);
+          showToast("Đã thêm ảnh thành công!", "success");
+        }
+      } catch (err: any) { showToast("Thêm ảnh thất bại: " + (err.message || String(err)), "error"); }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function updateElement(el: Element) {
+    setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
+  }
+
+  function addElement(type: ElementType) {
+    saveSnapshot();
+    const pageWidth = content.page?.width_mm || 210;
+    const newEl: Element = {
+      id: Date.now().toString(),
+      element_type: type,
+      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
+      position_y_mm: 25,
+      width_mm: 40,
+      height_mm: 10,
+      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
+        : type === "Select" ? { type: "Select", options: [], selected: null }
+        : type === "Checkbox" ? { type: "Checkbox", checked: false }
+        : { type: "Image", asset_id: 0 },
+    };
+    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedElementId(newEl.id);
+  }
+
+  const toggleOrientation = () => {
+    saveSnapshot();
+    setContent((prev) => ({
+      ...prev,
+      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
+    }));
+  };
+
+  if (loading) return <div style={{ padding: "32px", textAlign: "center" }}>⏳ Đang tải dữ liệu tài liệu...</div>;
+  const selectedElement = content.elements.find((e) => e.id === selectedElementId);
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+      {ToastComponent}
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
+          <input type="text" value={docName} onChange={(e) => setDocName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên tài liệu" />
+        </div>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
+          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
+            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+          </button>
+          <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
+        </div>
+        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveDocument}>Save</button>
+        </div>
+      </header>
+
+      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+        <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+          {content.elements.map((el) => {
+            const props = (el.properties as any) || {};
+            const isEditing = editingElementId === el.id;
+            const isSelected = selectedElementId === el.id;
+
+            return (
+              <div
+                key={el.id}
+                onClick={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
+                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
+                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
+                style={{
+                  position: "absolute",
+                  left: `${mmToPx(el.position_x_mm)}px`,
+                  top: `${mmToPx(el.position_y_mm)}px`,
+                  width: `${mmToPx(el.width_mm)}px`,
+                  height: `${mmToPx(el.height_mm)}px`,
+                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
+                  cursor: isEditing ? "text" : "move",
+                  touchAction: "none",
+                  userSelect: "none",
+                }}
+                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
+                onPointerDown={(e) => {
+                  if (isEditing) return;
+                  saveSnapshot();
+                  (document.activeElement as HTMLElement)?.blur();
+                  setEditingElementId(null);
+                  e.stopPropagation();
+                  setSelectedElementId(el.id);
+                  const rect = canvasRef.current?.getBoundingClientRect();
+                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
+                }}
+              >
+                {el.element_type === "Text" && (
+                  <textarea
+                    value={props.content || ""}
+                    onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })}
+                    onBlur={() => setEditingElementId(null)}
+                    style={{
+                      width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none",
+                      pointerEvents: isEditing ? "auto" : "none",
+                      fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
+                    }}
+                  />
+                )}
+                {el.element_type === "Select" && (
+                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
+                    {props.selected || "(Select)"}
+                  </div>
+                )}
+                {el.element_type === "Checkbox" && (
+                  <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />
+                )}
+                {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
+
+                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
+                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
+                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
+                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
+                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
+                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
+                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
+                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
+                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {contextMenu && (
+        <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
+            const target = content.elements.find((item) => item.id === contextMenu.elementId);
+            if (target) {
+              const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
+              setContent((prev) => ({ ...prev, elements: [...prev.elements, cloned] }));
+              setSelectedElementId(cloned.id);
+            }
+            setContextMenu(null);
+          }}>📋 Nhân bản (Duplicate)</button>
+          {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
+            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
+          )}
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
+            setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
+            setSelectedElementId(null);
+            setContextMenu(null);
+          }}>🗑 Xóa (Delete)</button>
+          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
+            e.stopPropagation();
+            setSelectedElementId(contextMenu.elementId);
+            setIsPropertiesOpen(true);
+            setContextMenu(null);
+          }}>⚙️ Thuộc tính (Properties)...</button>
+        </div>
+      )}
+
+      {isPropertiesOpen && selectedElement && (
+        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
+            <h3>Properties: {selectedElement.element_type}</h3>
+            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
+          </div>
+          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
+          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
+          <hr />
+          {selectedElement.element_type === "Text" && (
+            <>
+              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
+              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
+              <div>
+                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
+                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
+                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
+              </div>
+              <div>
+                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select> Alignment
+              </div>
+            </>
+          )}
+          {selectedElement.element_type === "Checkbox" && (
+            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
+          )}
+          {selectedElement.element_type === "Image" && (
+            <div>
+              <ImageElement assetId={selectedElement.properties.asset_id} />
+              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="src/TemplateEditor.tsx">
+import { useEffect, useState, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { mmToPx, pxToMm } from "./editor/coordinates";
+import { Element, ElementType, DocumentContent } from "./App";
+import { exportToPdf } from "./editor/pdfExporter";
+import { useToast } from "./components/Toast";
+
+interface TemplateEditorProps {
+  initialTemplate?: any;
+  onClose: () => void;
+}
+
+type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+function ImageElement({ assetId }: { assetId: number }) {
+  const [src, setSrc] = useState<string>("");
+  useEffect(() => {
+    if (assetId) {
+      invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
+    }
+  }, [assetId]);
+  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div>🖼 Image ({assetId})</div>;
+}
+
+export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps) {
+  const { showToast, ToastComponent } = useToast();
+  const templateId = initialTemplate?.id;
+  const [name, setName] = useState(initialTemplate?.name || "New Template");
+  const [description, /* setDescription */] = useState(initialTemplate?.description || "");
+  const [content, setContent] = useState<DocumentContent>(() => {
+    if (initialTemplate?.metadata) {
+      try {
+        const parsed = JSON.parse(initialTemplate.metadata);
+        return {
+          schema_version: parsed.schema_version || "1.0",
+          page: parsed.page || { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+          elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+        };
+      } catch (e) {
+        console.error("Lỗi parse metadata template:", e);
+      }
+    }
+    return {
+      schema_version: "1.0",
+      page: { width_mm: 210, height_mm: 297, margin_left_mm: 20, margin_right_mm: 20, margin_top_mm: 20, margin_bottom_mm: 20 },
+      elements: [],
+    };
+  });
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
+  const [resizeInfo, setResizeInfo] = useState<{
+    elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
+  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
+  const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
+  const [propPos, setPropPos] = useState({ x: window.innerWidth - 320, y: 80 });
+  const [propDragging, setPropDragging] = useState<{ startX: number; startY: number; posX: number; posY: number } | null>(null);
+
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceImageElementId = useRef<string | null>(null);
+
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const nameRef = useRef(name);
+  nameRef.current = name;
+  const descRef = useRef(description);
+  descRef.current = description;
+  const selectedIdRef = useRef(selectedElementId);
+  selectedIdRef.current = selectedElementId;
+  const editingIdRef = useRef(editingElementId);
+  editingIdRef.current = editingElementId;
+  const clipboardRef = useRef<Element | null>(null);
+  const historyRef = useRef<DocumentContent[]>([]);
+
+  const saveSnapshot = () => {
+    historyRef.current.push(structuredClone(contentRef.current));
+    if (historyRef.current.length > 30) historyRef.current.shift();
+  };
+
+  const undo = () => {
+    if (historyRef.current.length > 0) {
+      const prev = historyRef.current.pop();
+      if (prev) {
+        setContent(prev);
+        setSelectedElementId(null);
+        showToast("Đã hoàn tác (Undo)", "success");
+      }
+    } else {
+      showToast("Không còn thao tác để hoàn tác", "error");
+    }
+  };
+
+  const copySelected = () => {
+    if (!selectedIdRef.current) return;
+    const target = contentRef.current.elements.find((el) => el.id === selectedIdRef.current);
+    if (target) {
+      clipboardRef.current = structuredClone(target);
+      showToast("📋 Đã sao chép phần tử!", "success");
+    }
+  };
+
+  const pasteClipboard = () => {
+    if (!clipboardRef.current) return;
+    saveSnapshot();
+    const source = clipboardRef.current;
+    const newEl: Element = {
+      ...structuredClone(source),
+      id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      position_x_mm: Math.round((source.position_x_mm + 5) * 10) / 10,
+      position_y_mm: Math.round((source.position_y_mm + 5) * 10) / 10,
+    };
+    clipboardRef.current = structuredClone(newEl);
+    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedElementId(newEl.id);
+    showToast("📋 Đã dán phần tử!", "success");
+  };
+
+  async function saveTemplateInternal() {
+    try {
+      if (templateId) {
+        await invoke("update_template", {
+          id: templateId,
+          name: nameRef.current,
+          description: descRef.current || null,
+          metadata: JSON.stringify(contentRef.current),
+        });
+        showToast("Đã lưu Template thành công!", "success");
+      } else {
+        await invoke("create_template", {
+          name: nameRef.current,
+          description: descRef.current || null,
+          metadata: JSON.stringify(contentRef.current),
+        });
+        showToast("Đã tạo Template mới thành công!", "success");
+        onClose();
+      }
+    } catch (err: any) {
+      showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+    }
+  }
+
+  async function saveAsNew() {
+    try {
+      await invoke("create_template", {
+        name: nameRef.current + " (Bản sao)",
+        description: descRef.current || null,
+        metadata: JSON.stringify(contentRef.current),
+      });
+      showToast("Đã lưu thành Template mới!", "success");
+      onClose();
+    } catch (err: any) {
+      showToast("Lưu thất bại: " + (err.message || String(err)), "error");
+    }
+  }
+
+  useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener("pointerdown", closeMenu);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (isCtrl && key === "s") {
+        e.preventDefault();
+        saveTemplateInternal();
+        return;
+      }
+
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (editingIdRef.current !== null || activeTag === "input" || activeTag === "textarea") return;
+
+      if (isCtrl && key === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (isCtrl && key === "c") { e.preventDefault(); copySelected(); return; }
+      if (isCtrl && key === "v") { e.preventDefault(); pasteClipboard(); return; }
+      if (isCtrl && key === "d") { e.preventDefault(); copySelected(); pasteClipboard(); return; }
+
+      if ((key === "delete" || key === "backspace") && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const idToDelete = selectedIdRef.current;
+        setContent((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== idToDelete) }));
+        setSelectedElementId(null);
+        setIsPropertiesOpen(false);
+        showToast("🗑 Đã xóa phần tử!", "success");
+        return;
+      }
+
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key) && selectedIdRef.current) {
+        e.preventDefault();
+        saveSnapshot();
+        const step = e.shiftKey ? 5 : 1;
+        const idToMove = selectedIdRef.current;
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((el) => {
+            if (el.id !== idToMove) return el;
+            let nx = el.position_x_mm, ny = el.position_y_mm;
+            if (key === "arrowup") ny = Math.max(0, ny - step);
+            else if (key === "arrowdown") ny += step;
+            else if (key === "arrowleft") nx = Math.max(0, nx - step);
+            else if (key === "arrowright") nx += step;
+            return { ...el, position_x_mm: Math.round(nx * 10) / 10, position_y_mm: Math.round(ny * 10) / 10 };
+          }),
+        }));
+        return;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+
+      if (dragInfo && !resizeInfo) {
+        if (scrollContainerRef.current) {
+          const sRect = scrollContainerRef.current.getBoundingClientRect();
+          const threshold = 60, speed = 12;
+          if (e.clientY < sRect.top + threshold) scrollContainerRef.current.scrollTop -= speed;
+          else if (e.clientY > sRect.bottom - threshold) scrollContainerRef.current.scrollTop += speed;
+        }
+
+        const curX = pxToMm(e.clientX - rect.left);
+        const curY = pxToMm(e.clientY - rect.top);
+        const newX = Math.max(0, curX - dragInfo.offsetX);
+        const newY = Math.max(0, curY - dragInfo.offsetY);
+
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((item) =>
+            item.id === dragInfo.elementId
+              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
+              : item
+          ),
+        }));
+      } else if (resizeInfo) {
+        const deltaX = pxToMm(e.clientX - resizeInfo.startX);
+        const deltaY = pxToMm(e.clientY - resizeInfo.startY);
+        let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
+        let newX = initX, newY = initY, newW = initW, newH = initH;
+        const minW = 5, minH = 5;
+
+        if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
+        if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
+        if (handle.includes("w")) { const possibleW = initW - deltaX; if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; } }
+        if (handle.includes("n")) { const possibleH = initH - deltaY; if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; } }
+
+        setContent((prev) => ({
+          ...prev,
+          elements: prev.elements.map((item) =>
+            item.id === elementId
+              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10, width_mm: Math.round(newW * 10) / 10, height_mm: Math.round(newH * 10) / 10 }
+              : item
+          ),
+        }));
+      }
+    };
+
+    const handlePointerUp = () => {
+      setDragInfo(null);
+      setResizeInfo(null);
+    };
+
+    if (dragInfo || resizeInfo) {
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+    }
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [dragInfo, resizeInfo]);
+
+  useEffect(() => {
+    if (!propDragging) return;
+    const handleMove = (e: PointerEvent) => {
+      setPropPos({
+        x: Math.max(10, propDragging.posX + (e.clientX - propDragging.startX)),
+        y: Math.max(10, propDragging.posY + (e.clientY - propDragging.startY)),
+      });
+    };
+    const handleUp = () => setPropDragging(null);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [propDragging]);
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const existingElementId = replaceImageElementId.current;
+    replaceImageElementId.current = null;
+    showToast("Đang tải ảnh lên...", "loading");
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      try {
+        const assetId: number = await invoke("upload_asset_base64", { dataUrl, fileName: `${Date.now()}_${file.name}` });
+        if (existingElementId) {
+          const img = new Image();
+          img.src = dataUrl;
+          img.onload = () => {
+            const el = content.elements.find((e) => e.id === existingElementId);
+            if (el) {
+              const newHeight = Math.round((el.width_mm * (img.naturalHeight / img.naturalWidth)) * 10) / 10;
+              updateElement({ ...el, properties: { ...el.properties, asset_id: assetId }, height_mm: newHeight });
+              showToast("Đã đổi ảnh thành công!", "success");
+            }
+          };
+        } else {
+          saveSnapshot();
+          const pageWidth = content.page?.width_mm || 210;
+          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
+          const newEl: Element = {
+            id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
+            element_type: "Image",
+            position_x_mm: posX,
+            position_y_mm: 25,
+            width_mm: 40,
+            height_mm: 40,
+            properties: { type: "Image", asset_id: assetId },
+          };
+          setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+          setSelectedElementId(newEl.id);
+          showToast("Đã thêm ảnh thành công!", "success");
+        }
+      } catch (err: any) { showToast("Thêm ảnh thất bại: " + (err.message || String(err)), "error"); }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  const handleExportPdf = async () => {
+    showToast("Đang xuất PDF...", "loading");
+    try {
+      await exportToPdf(content, name);
+      showToast("Xuất PDF thành công!", "success");
+    } catch (err) {
+      showToast("Xuất PDF thất bại!", "error");
+    }
+  };
+
+  function updateElement(el: Element) {
+    setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
+  }
+
+  function addElement(type: ElementType) {
+    saveSnapshot();
+    const pageWidth = content.page?.width_mm || 210;
+    const newEl: Element = {
+      id: Date.now().toString(),
+      element_type: type,
+      position_x_mm: Math.round(((pageWidth - 40) / 2) * 10) / 10,
+      position_y_mm: 25,
+      width_mm: 40,
+      height_mm: 10,
+      properties: type === "Text" ? { type: "Text", content: "New Text", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" }
+        : type === "Select" ? { type: "Select", options: [], selected: null }
+        : type === "Checkbox" ? { type: "Checkbox", checked: false }
+        : { type: "Image", asset_id: 0 },
+    };
+    setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedElementId(newEl.id);
+  }
+
+  const toggleOrientation = () => {
+    saveSnapshot();
+    setContent((prev) => ({
+      ...prev,
+      page: { ...prev.page, width_mm: prev.page.height_mm, height_mm: prev.page.width_mm }
+    }));
+  };
+
+  const selectedElement = content.elements.find((e) => e.id === selectedElementId);
+  const canvasWidth = mmToPx(content.page.width_mm);
+  const canvasHeight = mmToPx(content.page.height_mm);
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+      {ToastComponent}
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", height: "54px", backgroundColor: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <button onClick={onClose} style={{ backgroundColor: "#f1f5f9", border: "none", padding: "6px 12px", borderRadius: "6px", color: "#475569", cursor: "pointer" }}>← Quay lại</button>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} style={{ fontWeight: 600, fontSize: "15px", color: "#1e293b", border: "none", outline: "none", background: "transparent" }} placeholder="Tên Template" />
+        </div>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f1f5f9", padding: "4px", borderRadius: "8px", border: "1px solid #e2e8f0" }} onClick={(e) => e.stopPropagation()}>
+          {(["Text", "Checkbox"] as ElementType[]).map((type) => <button key={type} style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => addElement(type)}>Add {type}</button>)}
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={() => { replaceImageElementId.current = null; fileInputRef.current?.click(); }}>Add Image</button>
+          <button style={{ backgroundColor: "#ffffff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "13px", fontWeight: 500, color: "#334155", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }} onClick={toggleOrientation}>
+            {content.page?.width_mm > content.page?.height_mm ? "📃 Ngang" : "📄 Dọc"}
+          </button>
+          <input type="file" ref={fileInputRef} style={{ display: "none" }} accept="image/png, image/jpeg, image/jpg, image/webp" onChange={handleFileSelected} />
+        </div>
+        <div style={{ display: "flex", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={handleExportPdf}>Export PDF</button>
+          <button style={{ backgroundColor: "#2563eb", color: "white", fontWeight: 600, padding: "6px 18px", borderRadius: "6px", border: "none", cursor: "pointer", boxShadow: "0 2px 4px rgba(37,99,235,0.2)" }} onClick={saveTemplateInternal}>Save</button>
+          <button style={{ backgroundColor: "#ffffff", border: "1px solid #cbd5e1", color: "#334155", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }} onClick={saveAsNew}>Save As New</button>
+        </div>
+      </header>
+
+      <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => { setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+        <div ref={canvasRef} style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.02)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); setIsPropertiesOpen(false); }}>
+          {content.elements.map((el) => {
+            const props = (el.properties as any) || {};
+            const isEditing = editingElementId === el.id;
+            const isSelected = selectedElementId === el.id;
+
+            return (
+              <div
+                key={el.id}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  (document.activeElement as HTMLElement)?.blur();
+                  setEditingElementId(null);
+                  setSelectedElementId(el.id); 
+                }}
+                onDoubleClick={(e) => { e.stopPropagation(); if (el.element_type === "Text") setEditingElementId(el.id); }}
+                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
+                style={{
+                  position: "absolute",
+                  left: `${mmToPx(el.position_x_mm)}px`,
+                  top: `${mmToPx(el.position_y_mm)}px`,
+                  width: `${mmToPx(el.width_mm)}px`,
+                  height: `${mmToPx(el.height_mm)}px`,
+                  border: isSelected ? "1.5px solid #2563eb" : "1px solid transparent",
+                  cursor: isEditing ? "text" : "move",
+                  touchAction: "none",
+                  userSelect: "none",
+                }}
+                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px dashed #94a3b8"; }}
+                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.border = "1px solid transparent"; }}
+                onPointerDown={(e) => {
+                  if (isEditing) return;
+                  saveSnapshot();
+                  (document.activeElement as HTMLElement)?.blur();
+                  setEditingElementId(null);
+                  e.stopPropagation();
+                  setSelectedElementId(el.id);
+                  const rect = canvasRef.current?.getBoundingClientRect();
+                  if (rect) setDragInfo({ elementId: el.id, offsetX: pxToMm(e.clientX - rect.left) - el.position_x_mm, offsetY: pxToMm(e.clientY - rect.top) - el.position_y_mm });
+                }}
+              >
+                {el.element_type === "Text" && (
+                  <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
+                )}
+                {el.element_type === "Select" && (
+                  <div style={{ width: "100%", height: "100%", padding: "2px", fontSize: "12px", color: "#555" }}>
+                    {props.selected || "(Select)"}
+                  </div>
+                )}
+                {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
+                {el.element_type === "Image" && <ImageElement assetId={props.asset_id} />}
+
+                {isSelected && (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleType[]).map((h) => {
+                  const posStyle: React.CSSProperties = { position: "absolute", width: "8px", height: "8px", backgroundColor: "#fff", border: "1.5px solid #0056b3", borderRadius: "2px", zIndex: 50 };
+                  if (h === "nw") Object.assign(posStyle, { top: "-4px", left: "-4px", cursor: "nwse-resize" });
+                  if (h === "n") Object.assign(posStyle, { top: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                  if (h === "ne") Object.assign(posStyle, { top: "-4px", right: "-4px", cursor: "nesw-resize" });
+                  if (h === "e") Object.assign(posStyle, { top: "calc(50% - 4px)", right: "-4px", cursor: "ew-resize" });
+                  if (h === "se") Object.assign(posStyle, { bottom: "-4px", right: "-4px", cursor: "nwse-resize" });
+                  if (h === "s") Object.assign(posStyle, { bottom: "-4px", left: "calc(50% - 4px)", cursor: "ns-resize" });
+                  if (h === "sw") Object.assign(posStyle, { bottom: "-4px", left: "-4px", cursor: "nesw-resize" });
+                  if (h === "w") Object.assign(posStyle, { top: "calc(50% - 4px)", left: "-4px", cursor: "ew-resize" });
+                  return <div key={h} style={posStyle} onPointerDown={(e) => { e.stopPropagation(); saveSnapshot(); setResizeInfo({ elementId: el.id, handle: h, startX: e.clientX, startY: e.clientY, initX: el.position_x_mm, initY: el.position_y_mm, initW: el.width_mm, initH: el.height_mm }); }} />;
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {contextMenu && (
+        <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, backgroundColor: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", borderRadius: "6px", zIndex: 2000, padding: "6px 0", minWidth: "160px" }}>
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => {
+            const target = content.elements.find((item) => item.id === contextMenu.elementId);
+            if (target) {
+              const cloned: Element = { ...structuredClone(target), id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 6), position_x_mm: target.position_x_mm + 5, position_y_mm: target.position_y_mm + 5 };
+              setContent((prev) => ({ ...prev, elements: [...prev.elements, cloned] }));
+              setSelectedElementId(cloned.id);
+            }
+            setContextMenu(null);
+          }}>📋 Nhân bản (Duplicate)</button>
+          {content.elements.find((e) => e.id === contextMenu.elementId)?.element_type === "Image" && (
+            <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={() => { replaceImageElementId.current = contextMenu.elementId; fileInputRef.current?.click(); setContextMenu(null); }}>🖼 Đổi ảnh khác...</button>
+          )}
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer", color: "red" }} onClick={() => {
+            setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== contextMenu.elementId) }));
+            setSelectedElementId(null);
+            setContextMenu(null);
+          }}>🗑 Xóa (Delete)</button>
+          <hr style={{ margin: "4px 0", border: "none", borderTop: "1px solid #eee" }} />
+          <button style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "none", cursor: "pointer" }} onClick={(e) => {
+            e.stopPropagation();
+            setSelectedElementId(contextMenu.elementId);
+            setIsPropertiesOpen(true);
+            setContextMenu(null);
+          }}>⚙️ Thuộc tính (Properties)...</button>
+        </div>
+      )}
+
+      {isPropertiesOpen && selectedElement && (
+        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: `${propPos.x}px`, top: `${propPos.y}px`, width: "280px", backgroundColor: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", borderRadius: "8px", padding: "14px", zIndex: 1000 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab" }} onPointerDown={(e) => setPropDragging({ startX: e.clientX, startY: e.clientY, posX: propPos.x, posY: propPos.y })}>
+            <h3>Properties: {selectedElement.element_type}</h3>
+            <button onClick={() => setIsPropertiesOpen(false)}>✕</button>
+          </div>
+          <div> X (mm): <input type="number" value={selectedElement.position_x_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_x_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> Y (mm): <input type="number" value={selectedElement.position_y_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, position_y_mm: Math.max(0, parseFloat(e.target.value) || 0) }); }} /> </div>
+          <div> W (mm): <input type="number" value={selectedElement.width_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, width_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
+          <div> H (mm): <input type="number" value={selectedElement.height_mm} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, height_mm: Math.max(2, parseFloat(e.target.value) || 2) }); }} /> </div>
+          <hr />
+          {selectedElement.element_type === "Text" && (
+            <>
+              <div><textarea value={selectedElement.properties.content} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, content: e.target.value } }); }} /></div>
+              <div><input type="number" value={selectedElement.properties.font_size || 12} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, font_size: parseFloat(e.target.value) || 12 } }); }} /> Font Size</div>
+              <div>
+                <input type="checkbox" checked={!!selectedElement.properties.is_bold} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_bold: e.target.checked } }); }} /> Bold
+                <input type="checkbox" checked={!!selectedElement.properties.is_italic} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_italic: e.target.checked } }); }} /> Italic
+                <input type="checkbox" checked={!!selectedElement.properties.is_underline} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, is_underline: e.target.checked } }); }} /> Underline
+              </div>
+              <div>
+                <select value={selectedElement.properties.alignment || "left"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, alignment: e.target.value } }); }}>
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select> Alignment
+              </div>
+            </>
+          )}
+          {selectedElement.element_type === "Checkbox" && (
+            <div>Checked: <input type="checkbox" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} /></div>
+          )}
+          {selectedElement.element_type === "Image" && (
+            <div>
+              <ImageElement assetId={selectedElement.properties.asset_id} />
+              <button onClick={() => { replaceImageElementId.current = selectedElement.id; fileInputRef.current?.click(); }}>Đổi ảnh khác</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 </file>
 
 </files>
