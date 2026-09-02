@@ -18,7 +18,7 @@ mod tests {
                 {"id": "1", "element_type": "Text", "position_x_mm": 10.0, "position_y_mm": 10.0, "width_mm": 50.0, "height_mm": 10.0, "properties": {"type": "Text", "content": "Original Template", "font_family": "Arial", "font_size": 12.0, "is_bold": false, "is_italic": false, "is_underline": false, "alignment": "left"}}
             ]
         }"#;
-        let template_id = TemplateRepo::create(&conn, user_id, "Template A", template_json).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Template A", None, template_json).unwrap();
         let doc_id = DocumentRepo::create(&conn, user_id, "Document A", Some(template_id), None).unwrap();
 
         let doc = DocumentRepo::get_by_user(&conn, user_id).unwrap().into_iter().find(|d| d.id == doc_id).unwrap();
@@ -52,7 +52,7 @@ mod tests {
                 {"id": "1", "element_type": "Text", "position_x_mm": 10, "position_y_mm": 10, "width_mm": 50, "height_mm": 10, "properties": {"type": "Text", "content": "MODIFIED Document", "font_family": "Arial", "font_size": 12, "is_bold": false, "is_italic": false, "is_underline": false, "alignment": "left"}}
             ]
         }"#;
-        conn.execute("UPDATE documents SET metadata = ?1 WHERE id = ?2", (updated_doc_json, doc_id)).unwrap();
+        DocumentRepo::update(&conn, doc_id, updated_doc_json).unwrap();
         
         let template_after_doc_update = TemplateRepo::get_by_user(&conn, user_id).unwrap().into_iter().find(|t| t.id == template_id).unwrap();
         assert_eq!(template_after_doc_update.metadata, updated_template_json, "Template metadata must NOT change when document is updated");
@@ -63,7 +63,7 @@ mod tests {
         assert_eq!(doc_after_template_deletion.metadata, updated_doc_json, "Document content must remain intact after template deletion");
         assert_eq!(doc_after_template_deletion.source_template_id, None, "source_template_id should be NULL (SET NULL) after template deletion");
 
-        // Test F: Nested JSON independence (Implicit in Test A-C, but verified by property change)
+        // Test F: Nested JSON independence
         assert!(doc_after_template_deletion.metadata.contains("MODIFIED Document"));
     }
 
@@ -76,9 +76,8 @@ mod tests {
         {
             let conn = db::init_db_connection(db_file).expect("Failed to init file db");
             let user_id = UserRepo::create(&conn, "persisted_user", "password").unwrap();
-            let template_id = TemplateRepo::create(&conn, user_id, "Template", "{\"key\":\"original\"}").unwrap();
+            let template_id = TemplateRepo::create(&conn, user_id, "Template", None, "{\"key\":\"original\"}").unwrap();
             DocumentRepo::create(&conn, user_id, "Doc", Some(template_id), None).unwrap();
-            // Close connection by dropping
         }
 
         {
@@ -91,7 +90,6 @@ mod tests {
             assert_eq!(docs.len(), 1);
             assert_eq!(docs[0].metadata, "{\"key\":\"original\"}");
             
-            // Further prove independence after reload
             TemplateRepo::update(&conn, templates[0].id, "Updated", None, "{\"key\":\"modified\"}").unwrap();
             let doc_after_reload_and_update = DocumentRepo::get_by_user(&conn, user.id).unwrap();
             assert_eq!(doc_after_reload_and_update[0].metadata, "{\"key\":\"original\"}");
@@ -108,7 +106,7 @@ mod tests {
         // 1. Create a template with elements
         let populated_content = crate::repo::get_populated_content("Bug Report");
         let metadata = serde_json::to_string(&populated_content).unwrap();
-        let template_id = TemplateRepo::create(&conn, user_id, "Bug Report Template", &metadata).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Bug Report Template", None, &metadata).unwrap();
 
         // 2. Use Template to create a Document
         let doc_id = DocumentRepo::create(&conn, user_id, "New Document", Some(template_id), None).unwrap();
@@ -151,38 +149,34 @@ mod tests {
         let conn = db::init_db_in_memory().expect("Failed to init in-memory db");
         let user_id = UserRepo::create(&conn, "repairuser", "password").unwrap();
         
-        // 1. Manually create a "Bug Report" template that is empty and has created_at == updated_at
-        // This simulates a broken state that should be repaired.
+        // 1. Template chưa sửa (created_at == updated_at) và rỗng -> ĐƯỢC TỰ ĐỘNG SỬA/NẠP NỘI DUNG
         let empty_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
         conn.execute(
             "INSERT INTO templates (user_id, name, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, '2026-08-01 00:00:00', '2026-08-01 00:00:00')",
             (user_id, "Bug Report", &empty_content),
         ).unwrap();
         
-        // 2. Run the repair
+        // 2. Chạy seed / repair
         TemplateRepo::seed_for_user(&conn, user_id).unwrap();
         
-        // 3. Verify it's now populated
         let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
         let bug_report = templates.iter().find(|t| t.name == "Bug Report").unwrap();
         let content: DocumentContent = serde_json::from_str(&bug_report.metadata).unwrap();
         assert!(!content.elements.is_empty(), "Bug Report should be repaired and populated");
 
-        // 4. Manually create a "Test Case" template, but modify it
-        // This simulates a user-modified template that SHOULD NOT be repaired.
-        // We populate it with content, so even if the repair logic ran, it would skip it because content is NOT empty.
-        // But to be even more sure, we set updated_at != created_at.
-        let populated_content = serde_json::to_string(&crate::repo::get_populated_content("Test Case")).unwrap();
+        // 3. Template người dùng đã sửa (created_at != updated_at) -> KHÔNG ĐƯỢC GHI ĐÈ
+        let modified_user_id = UserRepo::create(&conn, "modified_user", "password").unwrap();
         conn.execute(
             "INSERT INTO templates (user_id, name, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, '2026-08-01 00:00:00', '2026-08-01 01:00:00')",
-            (user_id, "Test Case", &populated_content),
+            (modified_user_id, "Test Case", &empty_content),
         ).unwrap();
         
-        TemplateRepo::seed_for_user(&conn, user_id).unwrap();
+        TemplateRepo::seed_for_user(&conn, modified_user_id).unwrap();
         
-        let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
-        let test_case = templates.iter().find(|t| t.name == "Test Case").unwrap();
-        assert_eq!(test_case.metadata, populated_content, "Modified Test Case should NOT be repaired and content should remain unchanged");
+        let mod_templates = TemplateRepo::get_by_user(&conn, modified_user_id).unwrap();
+        let test_case = mod_templates.iter().find(|t| t.name == "Test Case").unwrap();
+        let test_case_content: DocumentContent = serde_json::from_str(&test_case.metadata).unwrap();
+        assert!(test_case_content.elements.is_empty(), "User-modified Test Case must NOT be overwritten");
     }
 
     #[test]
@@ -194,7 +188,7 @@ mod tests {
         assert_eq!(TemplateRepo::count_for_user(&conn, user_id).unwrap(), 3);
 
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        let result = TemplateRepo::create(&conn, user_id, "New Template", &default_content);
+        let result = TemplateRepo::create(&conn, user_id, "New Template", None, &default_content);
         assert!(result.is_err());
     }
 
@@ -205,7 +199,7 @@ mod tests {
         let user_b = UserRepo::create(&conn, "userB", "password").unwrap();
 
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        TemplateRepo::create(&conn, user_a, "Template A", &default_content).unwrap();
+        TemplateRepo::create(&conn, user_a, "Template A", None, &default_content).unwrap();
 
         let templates_b = TemplateRepo::get_by_user(&conn, user_b).unwrap();
         assert!(templates_b.is_empty());
@@ -270,7 +264,7 @@ mod tests {
 
         // Test A: Creation timestamp
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        let template_id = TemplateRepo::create(&conn, user_id, "Template", &default_content).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Template", None, &default_content).unwrap();
         let doc_id = DocumentRepo::create(&conn, user_id, "Doc", Some(template_id), None).unwrap();
 
         let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
@@ -292,9 +286,10 @@ mod tests {
         let template_created_at_init = template.created_at.clone();
         let template_updated_at_init = template.updated_at.clone();
 
-        // Test C: Update timestamp (Sleep 1s for SQLite CURRENT_TIMESTAMP resolution)
-        sleep(Duration::from_secs(1));
+        // Sleep 2s để đảm bảo SQLite CURRENT_TIMESTAMP (độ phân giải 1 giây) nhảy sang giây mới
+        sleep(Duration::from_secs(2));
 
+        // Cập nhật Document qua DocumentRepo
         DocumentRepo::update(&conn, doc_id, "{\"updated\": true}").unwrap();
         
         let docs_after_update = DocumentRepo::get_by_user(&conn, user_id).unwrap();

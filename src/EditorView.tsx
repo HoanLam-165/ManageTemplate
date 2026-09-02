@@ -12,6 +12,10 @@ interface EditorViewProps {
 
 type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+function snapVal(val: number, step: number = 5): number {
+  return Math.round(val / step) * step;
+}
+
 function ImageElement({ assetId }: { assetId: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
@@ -19,7 +23,13 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
+  return src ? (
+    <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+  ) : (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>
+      🖼 Ảnh ({assetId})
+    </div>
+  );
 }
 
 export function EditorView({ documentId, onClose }: EditorViewProps) {
@@ -33,6 +43,9 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+
   const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
   const [resizeInfo, setResizeInfo] = useState<{
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
@@ -53,6 +66,8 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   selectedIdRef.current = selectedElementId;
   const editingIdRef = useRef(editingElementId);
   editingIdRef.current = editingElementId;
+  const snapEnabledRef = useRef(snapEnabled);
+  snapEnabledRef.current = snapEnabled;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
   const lastSavedStateRef = useRef<string>("");
@@ -271,6 +286,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     const handlePointerMove = (e: PointerEvent) => {
       if (!canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
+      const isAlt = e.altKey;
 
       if (dragInfo && !resizeInfo) {
         if (scrollContainerRef.current) {
@@ -286,14 +302,22 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 
         const curX = pxToMm(e.clientX - rect.left);
         const curY = pxToMm(e.clientY - rect.top);
-        const newX = Math.max(0, curX - dragInfo.offsetX);
-        const newY = Math.max(0, curY - dragInfo.offsetY);
+        let newX = Math.max(0, curX - dragInfo.offsetX);
+        let newY = Math.max(0, curY - dragInfo.offsetY);
+
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+        }
 
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === dragInfo.elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
+              ? { ...item, position_x_mm: newX, position_y_mm: newY }
               : item
           ),
         }));
@@ -315,16 +339,28 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
           if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
         }
 
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+          newW = Math.max(minW, snapVal(newW, 5));
+          newH = Math.max(minH, snapVal(newH, 5));
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+          newW = Math.round(newW * 10) / 10;
+          newH = Math.round(newH * 10) / 10;
+        }
+
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
               ? {
                   ...item,
-                  position_x_mm: Math.round(newX * 10) / 10,
-                  position_y_mm: Math.round(newY * 10) / 10,
-                  width_mm: Math.round(newW * 10) / 10,
-                  height_mm: Math.round(newH * 10) / 10,
+                  position_x_mm: newX,
+                  position_y_mm: newY,
+                  width_mm: newW,
+                  height_mm: newH,
                 }
               : item
           ),
@@ -383,7 +419,10 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         } else {
           saveSnapshot();
           const pageWidth = content.page?.width_mm || 210;
-          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
+          let posX = (pageWidth - 40) / 2;
+          if (snapEnabled) posX = snapVal(posX, 5);
+          else posX = Math.round(posX * 10) / 10;
+
           const newEl: Element = {
             id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
             element_type: "Image",
@@ -406,23 +445,36 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: "Text" | "Checkbox") {
+  function addElement(type: "Text" | "Number" | "Date" | "Select" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
     let initialProps: any = { type: "Text", content: "Văn bản mới", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
     let initialW = 50;
     let initialH = 10;
 
-    if (type === "Checkbox") {
+    if (type === "Number") {
+      initialProps = { type: "Number", value: 0 };
+      initialW = 30;
+    } else if (type === "Date") {
+      initialProps = { type: "Date", value: "", format: "YYYY-MM-DD" };
+      initialW = 40;
+    } else if (type === "Select") {
+      initialProps = { type: "Select", options: ["Option 1", "Option 2"], selected: "Option 1" };
+      initialW = 40;
+    } else if (type === "Checkbox") {
       initialProps = { type: "Checkbox", checked: false };
       initialW = 10;
       initialH = 10;
     }
 
+    let posX = (pageWidth - initialW) / 2;
+    if (snapEnabled) posX = snapVal(posX, 5);
+    else posX = Math.round(posX * 10) / 10;
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
+      position_x_mm: posX,
       position_y_mm: 25,
       width_mm: initialW,
       height_mm: initialH,
@@ -461,7 +513,21 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
-          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+          <div
+            ref={canvasRef}
+            style={{
+              width: `${mmToPx(content.page?.width_mm || 210)}px`,
+              height: `${mmToPx(content.page?.height_mm || 297)}px`,
+              backgroundColor: "#ffffff",
+              borderRadius: "2px",
+              position: "relative",
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)",
+              backgroundImage: showGrid ? "radial-gradient(#cbd5e1 1px, transparent 1px)" : "none",
+              backgroundSize: `${mmToPx(5)}px ${mmToPx(5)}px`,
+            }}
+            onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}
+          >
             {content.elements.map((el) => {
               const props = (el.properties as any) || {};
               const isEditing = editingElementId === el.id;
@@ -508,6 +574,17 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                         fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
                       }}
                     />
+                  )}
+                  {el.element_type === "Number" && (
+                    <input type="number" value={props.value || 0} onChange={(e) => updateElement({ ...el, properties: { ...props, value: parseFloat(e.target.value) || 0 } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Date" && (
+                    <input type="date" value={props.value || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, value: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Select" && (
+                    <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }}>
+                      {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
                   )}
                   {el.element_type === "Checkbox" && (
                     <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -592,6 +669,45 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                 </div>
               )}
 
+              {selectedElement.element_type === "Number" && (
+                <div>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Giá trị</label>
+                  <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.value || 0} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, value: parseFloat(e.target.value) || 0 } }); }} />
+                </div>
+              )}
+
+              {selectedElement.element_type === "Date" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Ngày</label>
+                    <input type="date" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.value || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, value: e.target.value } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Định dạng</label>
+                    <select style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.format || "YYYY-MM-DD"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, format: e.target.value } }); }}>
+                      <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                      <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                      <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Select" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Tùy chọn (phân cách bởi dấu phẩy)</label>
+                    <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map(s => s.trim()) } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Chọn giá trị mặc định</label>
+                    <select style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.selected || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, selected: e.target.value } }); }}>
+                      {(selectedElement.properties.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               {selectedElement.element_type === "Checkbox" && (
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <input type="checkbox" id="chk-prop" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} />
@@ -616,6 +732,20 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                 <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Lưới & Căn chỉnh</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
+                    Hiển thị lưới chấm (5mm)
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} />
+                    Hít tọa độ Snap (5mm)
+                  </label>
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>💡 Giữ phím <b>Alt</b> khi kéo để di chuyển tự do.</span>
                 </div>
               </div>
               <div style={{ marginBottom: "16px" }}>

@@ -3,13 +3,20 @@ import { DocumentContent } from "../App";
 import { invoke } from "@tauri-apps/api/core";
 
 async function loadUnicodeFont(doc: jsPDF) {
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Font loading timed out")), 5000)
+  );
+
   try {
     const fontUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf";
     const fontBoldUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Medium.ttf";
     
-    const [regularBuffer, boldBuffer] = await Promise.all([
-      fetch(fontUrl).then(res => res.arrayBuffer()),
-      fetch(fontBoldUrl).then(res => res.arrayBuffer()),
+    const [regularBuffer, boldBuffer] = await Promise.race([
+      Promise.all([
+        fetch(fontUrl).then(res => res.arrayBuffer()),
+        fetch(fontBoldUrl).then(res => res.arrayBuffer()),
+      ]),
+      timeoutPromise as Promise<[ArrayBuffer, ArrayBuffer]>
     ]);
 
     const toBase64 = (buf: ArrayBuffer) => {
@@ -29,7 +36,8 @@ async function loadUnicodeFont(doc: jsPDF) {
     
     doc.setFont("Roboto", "normal");
   } catch (err) {
-    console.warn("--> Không thể tải font Roboto, dùng font mặc định:", err);
+    console.warn("--> Không thể tải font Unicode, dùng font mặc định:", err);
+    doc.setFont("helvetica", "normal");
   }
 }
 

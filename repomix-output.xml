@@ -2229,7 +2229,7 @@ mod tests {
                 {"id": "1", "element_type": "Text", "position_x_mm": 10.0, "position_y_mm": 10.0, "width_mm": 50.0, "height_mm": 10.0, "properties": {"type": "Text", "content": "Original Template", "font_family": "Arial", "font_size": 12.0, "is_bold": false, "is_italic": false, "is_underline": false, "alignment": "left"}}
             ]
         }"#;
-        let template_id = TemplateRepo::create(&conn, user_id, "Template A", template_json).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Template A", None, template_json).unwrap();
         let doc_id = DocumentRepo::create(&conn, user_id, "Document A", Some(template_id), None).unwrap();
 
         let doc = DocumentRepo::get_by_user(&conn, user_id).unwrap().into_iter().find(|d| d.id == doc_id).unwrap();
@@ -2263,7 +2263,7 @@ mod tests {
                 {"id": "1", "element_type": "Text", "position_x_mm": 10, "position_y_mm": 10, "width_mm": 50, "height_mm": 10, "properties": {"type": "Text", "content": "MODIFIED Document", "font_family": "Arial", "font_size": 12, "is_bold": false, "is_italic": false, "is_underline": false, "alignment": "left"}}
             ]
         }"#;
-        conn.execute("UPDATE documents SET metadata = ?1 WHERE id = ?2", (updated_doc_json, doc_id)).unwrap();
+        DocumentRepo::update(&conn, doc_id, updated_doc_json).unwrap();
         
         let template_after_doc_update = TemplateRepo::get_by_user(&conn, user_id).unwrap().into_iter().find(|t| t.id == template_id).unwrap();
         assert_eq!(template_after_doc_update.metadata, updated_template_json, "Template metadata must NOT change when document is updated");
@@ -2274,7 +2274,7 @@ mod tests {
         assert_eq!(doc_after_template_deletion.metadata, updated_doc_json, "Document content must remain intact after template deletion");
         assert_eq!(doc_after_template_deletion.source_template_id, None, "source_template_id should be NULL (SET NULL) after template deletion");
 
-        // Test F: Nested JSON independence (Implicit in Test A-C, but verified by property change)
+        // Test F: Nested JSON independence
         assert!(doc_after_template_deletion.metadata.contains("MODIFIED Document"));
     }
 
@@ -2287,9 +2287,8 @@ mod tests {
         {
             let conn = db::init_db_connection(db_file).expect("Failed to init file db");
             let user_id = UserRepo::create(&conn, "persisted_user", "password").unwrap();
-            let template_id = TemplateRepo::create(&conn, user_id, "Template", "{\"key\":\"original\"}").unwrap();
+            let template_id = TemplateRepo::create(&conn, user_id, "Template", None, "{\"key\":\"original\"}").unwrap();
             DocumentRepo::create(&conn, user_id, "Doc", Some(template_id), None).unwrap();
-            // Close connection by dropping
         }
 
         {
@@ -2302,7 +2301,6 @@ mod tests {
             assert_eq!(docs.len(), 1);
             assert_eq!(docs[0].metadata, "{\"key\":\"original\"}");
             
-            // Further prove independence after reload
             TemplateRepo::update(&conn, templates[0].id, "Updated", None, "{\"key\":\"modified\"}").unwrap();
             let doc_after_reload_and_update = DocumentRepo::get_by_user(&conn, user.id).unwrap();
             assert_eq!(doc_after_reload_and_update[0].metadata, "{\"key\":\"original\"}");
@@ -2319,7 +2317,7 @@ mod tests {
         // 1. Create a template with elements
         let populated_content = crate::repo::get_populated_content("Bug Report");
         let metadata = serde_json::to_string(&populated_content).unwrap();
-        let template_id = TemplateRepo::create(&conn, user_id, "Bug Report Template", &metadata).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Bug Report Template", None, &metadata).unwrap();
 
         // 2. Use Template to create a Document
         let doc_id = DocumentRepo::create(&conn, user_id, "New Document", Some(template_id), None).unwrap();
@@ -2362,38 +2360,34 @@ mod tests {
         let conn = db::init_db_in_memory().expect("Failed to init in-memory db");
         let user_id = UserRepo::create(&conn, "repairuser", "password").unwrap();
         
-        // 1. Manually create a "Bug Report" template that is empty and has created_at == updated_at
-        // This simulates a broken state that should be repaired.
+        // 1. Template chưa sửa (created_at == updated_at) và rỗng -> ĐƯỢC TỰ ĐỘNG SỬA/NẠP NỘI DUNG
         let empty_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
         conn.execute(
             "INSERT INTO templates (user_id, name, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, '2026-08-01 00:00:00', '2026-08-01 00:00:00')",
             (user_id, "Bug Report", &empty_content),
         ).unwrap();
         
-        // 2. Run the repair
+        // 2. Chạy seed / repair
         TemplateRepo::seed_for_user(&conn, user_id).unwrap();
         
-        // 3. Verify it's now populated
         let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
         let bug_report = templates.iter().find(|t| t.name == "Bug Report").unwrap();
         let content: DocumentContent = serde_json::from_str(&bug_report.metadata).unwrap();
         assert!(!content.elements.is_empty(), "Bug Report should be repaired and populated");
 
-        // 4. Manually create a "Test Case" template, but modify it
-        // This simulates a user-modified template that SHOULD NOT be repaired.
-        // We populate it with content, so even if the repair logic ran, it would skip it because content is NOT empty.
-        // But to be even more sure, we set updated_at != created_at.
-        let populated_content = serde_json::to_string(&crate::repo::get_populated_content("Test Case")).unwrap();
+        // 3. Template người dùng đã sửa (created_at != updated_at) -> KHÔNG ĐƯỢC GHI ĐÈ
+        let modified_user_id = UserRepo::create(&conn, "modified_user", "password").unwrap();
         conn.execute(
             "INSERT INTO templates (user_id, name, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, '2026-08-01 00:00:00', '2026-08-01 01:00:00')",
-            (user_id, "Test Case", &populated_content),
+            (modified_user_id, "Test Case", &empty_content),
         ).unwrap();
         
-        TemplateRepo::seed_for_user(&conn, user_id).unwrap();
+        TemplateRepo::seed_for_user(&conn, modified_user_id).unwrap();
         
-        let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
-        let test_case = templates.iter().find(|t| t.name == "Test Case").unwrap();
-        assert_eq!(test_case.metadata, populated_content, "Modified Test Case should NOT be repaired and content should remain unchanged");
+        let mod_templates = TemplateRepo::get_by_user(&conn, modified_user_id).unwrap();
+        let test_case = mod_templates.iter().find(|t| t.name == "Test Case").unwrap();
+        let test_case_content: DocumentContent = serde_json::from_str(&test_case.metadata).unwrap();
+        assert!(test_case_content.elements.is_empty(), "User-modified Test Case must NOT be overwritten");
     }
 
     #[test]
@@ -2405,7 +2399,7 @@ mod tests {
         assert_eq!(TemplateRepo::count_for_user(&conn, user_id).unwrap(), 3);
 
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        let result = TemplateRepo::create(&conn, user_id, "New Template", &default_content);
+        let result = TemplateRepo::create(&conn, user_id, "New Template", None, &default_content);
         assert!(result.is_err());
     }
 
@@ -2416,7 +2410,7 @@ mod tests {
         let user_b = UserRepo::create(&conn, "userB", "password").unwrap();
 
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        TemplateRepo::create(&conn, user_a, "Template A", &default_content).unwrap();
+        TemplateRepo::create(&conn, user_a, "Template A", None, &default_content).unwrap();
 
         let templates_b = TemplateRepo::get_by_user(&conn, user_b).unwrap();
         assert!(templates_b.is_empty());
@@ -2481,7 +2475,7 @@ mod tests {
 
         // Test A: Creation timestamp
         let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        let template_id = TemplateRepo::create(&conn, user_id, "Template", &default_content).unwrap();
+        let template_id = TemplateRepo::create(&conn, user_id, "Template", None, &default_content).unwrap();
         let doc_id = DocumentRepo::create(&conn, user_id, "Doc", Some(template_id), None).unwrap();
 
         let templates = TemplateRepo::get_by_user(&conn, user_id).unwrap();
@@ -2503,9 +2497,10 @@ mod tests {
         let template_created_at_init = template.created_at.clone();
         let template_updated_at_init = template.updated_at.clone();
 
-        // Test C: Update timestamp (Sleep 1s for SQLite CURRENT_TIMESTAMP resolution)
-        sleep(Duration::from_secs(1));
+        // Sleep 2s để đảm bảo SQLite CURRENT_TIMESTAMP (độ phân giải 1 giây) nhảy sang giây mới
+        sleep(Duration::from_secs(2));
 
+        // Cập nhật Document qua DocumentRepo
         DocumentRepo::update(&conn, doc_id, "{\"updated\": true}").unwrap();
         
         let docs_after_update = DocumentRepo::get_by_user(&conn, user_id).unwrap();
@@ -4306,13 +4301,20 @@ import { DocumentContent } from "../App";
 import { invoke } from "@tauri-apps/api/core";
 
 async function loadUnicodeFont(doc: jsPDF) {
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Font loading timed out")), 5000)
+  );
+
   try {
     const fontUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf";
     const fontBoldUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Medium.ttf";
     
-    const [regularBuffer, boldBuffer] = await Promise.all([
-      fetch(fontUrl).then(res => res.arrayBuffer()),
-      fetch(fontBoldUrl).then(res => res.arrayBuffer()),
+    const [regularBuffer, boldBuffer] = await Promise.race([
+      Promise.all([
+        fetch(fontUrl).then(res => res.arrayBuffer()),
+        fetch(fontBoldUrl).then(res => res.arrayBuffer()),
+      ]),
+      timeoutPromise as Promise<[ArrayBuffer, ArrayBuffer]>
     ]);
 
     const toBase64 = (buf: ArrayBuffer) => {
@@ -4332,7 +4334,8 @@ async function loadUnicodeFont(doc: jsPDF) {
     
     doc.setFont("Roboto", "normal");
   } catch (err) {
-    console.warn("--> Không thể tải font Roboto, dùng font mặc định:", err);
+    console.warn("--> Không thể tải font Unicode, dùng font mặc định:", err);
+    doc.setFont("helvetica", "normal");
   }
 }
 
@@ -4785,7 +4788,6 @@ impl TemplateRepo {
         let default_content = DocumentContent::default_content();
 
         for name in templates.iter() {
-            // Find existing
             let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
                 "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
                 (user_id, *name),
@@ -4804,8 +4806,6 @@ impl TemplateRepo {
 
             match existing_template_res {
                 Ok(template) => {
-                    // Repair ONLY if name is "Bug Report", "Test Case", or "Meeting Notes",
-                    // and template was never modified (created_at == updated_at)
                     if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
                         && template.created_at == template.updated_at
                     {
@@ -4914,25 +4914,21 @@ fn create_date_el(label: &str, x: f64, y: f64) -> Element {
     }
 }
 
-
 pub struct DocumentRepo;
 
 impl DocumentRepo {
     pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
         let content_to_store = if let Some(template_id) = source_template_id {
-            // Fetch template content
             let template_metadata: String = conn.query_row(
                 "SELECT metadata FROM templates WHERE id = ?1",
                 [template_id],
                 |row| row.get(0),
             )?;
             
-            // Try parsing as DocumentContent first (handles modern/correct data)
             if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
                 serde_json::to_string(&doc_content)
                     .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
             } else {
-                // If that fails, it's legacy data, copy as is
                 template_metadata
             }
         } else {
@@ -4971,6 +4967,14 @@ impl DocumentRepo {
         conn.execute(
             "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
             (id, user_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update(conn: &Connection, id: i64, metadata: &str) -> Result<(), AppError> {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
         )?;
         Ok(())
     }
@@ -5017,6 +5021,7 @@ serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 bcrypt = "0.15"
 base64 = "0.22"
+chrono = "0.4"
 </file>
 
 <file path="package.json">
@@ -5352,6 +5357,10 @@ interface EditorViewProps {
 
 type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+function snapVal(val: number, step: number = 5): number {
+  return Math.round(val / step) * step;
+}
+
 function ImageElement({ assetId }: { assetId: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
@@ -5359,7 +5368,13 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
+  return src ? (
+    <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+  ) : (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>
+      🖼 Ảnh ({assetId})
+    </div>
+  );
 }
 
 export function EditorView({ documentId, onClose }: EditorViewProps) {
@@ -5373,6 +5388,9 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+
   const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
   const [resizeInfo, setResizeInfo] = useState<{
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
@@ -5393,6 +5411,8 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   selectedIdRef.current = selectedElementId;
   const editingIdRef = useRef(editingElementId);
   editingIdRef.current = editingElementId;
+  const snapEnabledRef = useRef(snapEnabled);
+  snapEnabledRef.current = snapEnabled;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
   const lastSavedStateRef = useRef<string>("");
@@ -5611,6 +5631,7 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     const handlePointerMove = (e: PointerEvent) => {
       if (!canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
+      const isAlt = e.altKey;
 
       if (dragInfo && !resizeInfo) {
         if (scrollContainerRef.current) {
@@ -5626,14 +5647,22 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 
         const curX = pxToMm(e.clientX - rect.left);
         const curY = pxToMm(e.clientY - rect.top);
-        const newX = Math.max(0, curX - dragInfo.offsetX);
-        const newY = Math.max(0, curY - dragInfo.offsetY);
+        let newX = Math.max(0, curX - dragInfo.offsetX);
+        let newY = Math.max(0, curY - dragInfo.offsetY);
+
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+        }
 
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === dragInfo.elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
+              ? { ...item, position_x_mm: newX, position_y_mm: newY }
               : item
           ),
         }));
@@ -5655,16 +5684,28 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
           if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; }
         }
 
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+          newW = Math.max(minW, snapVal(newW, 5));
+          newH = Math.max(minH, snapVal(newH, 5));
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+          newW = Math.round(newW * 10) / 10;
+          newH = Math.round(newH * 10) / 10;
+        }
+
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
               ? {
                   ...item,
-                  position_x_mm: Math.round(newX * 10) / 10,
-                  position_y_mm: Math.round(newY * 10) / 10,
-                  width_mm: Math.round(newW * 10) / 10,
-                  height_mm: Math.round(newH * 10) / 10,
+                  position_x_mm: newX,
+                  position_y_mm: newY,
+                  width_mm: newW,
+                  height_mm: newH,
                 }
               : item
           ),
@@ -5723,7 +5764,10 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
         } else {
           saveSnapshot();
           const pageWidth = content.page?.width_mm || 210;
-          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
+          let posX = (pageWidth - 40) / 2;
+          if (snapEnabled) posX = snapVal(posX, 5);
+          else posX = Math.round(posX * 10) / 10;
+
           const newEl: Element = {
             id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
             element_type: "Image",
@@ -5746,23 +5790,36 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: "Text" | "Checkbox") {
+  function addElement(type: "Text" | "Number" | "Date" | "Select" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
     let initialProps: any = { type: "Text", content: "Văn bản mới", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
     let initialW = 50;
     let initialH = 10;
 
-    if (type === "Checkbox") {
+    if (type === "Number") {
+      initialProps = { type: "Number", value: 0 };
+      initialW = 30;
+    } else if (type === "Date") {
+      initialProps = { type: "Date", value: "", format: "YYYY-MM-DD" };
+      initialW = 40;
+    } else if (type === "Select") {
+      initialProps = { type: "Select", options: ["Option 1", "Option 2"], selected: "Option 1" };
+      initialW = 40;
+    } else if (type === "Checkbox") {
       initialProps = { type: "Checkbox", checked: false };
       initialW = 10;
       initialH = 10;
     }
 
+    let posX = (pageWidth - initialW) / 2;
+    if (snapEnabled) posX = snapVal(posX, 5);
+    else posX = Math.round(posX * 10) / 10;
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
+      position_x_mm: posX,
       position_y_mm: 25,
       width_mm: initialW,
       height_mm: initialH,
@@ -5801,7 +5858,21 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
-          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+          <div
+            ref={canvasRef}
+            style={{
+              width: `${mmToPx(content.page?.width_mm || 210)}px`,
+              height: `${mmToPx(content.page?.height_mm || 297)}px`,
+              backgroundColor: "#ffffff",
+              borderRadius: "2px",
+              position: "relative",
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)",
+              backgroundImage: showGrid ? "radial-gradient(#cbd5e1 1px, transparent 1px)" : "none",
+              backgroundSize: `${mmToPx(5)}px ${mmToPx(5)}px`,
+            }}
+            onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}
+          >
             {content.elements.map((el) => {
               const props = (el.properties as any) || {};
               const isEditing = editingElementId === el.id;
@@ -5848,6 +5919,17 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                         fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px",
                       }}
                     />
+                  )}
+                  {el.element_type === "Number" && (
+                    <input type="number" value={props.value || 0} onChange={(e) => updateElement({ ...el, properties: { ...props, value: parseFloat(e.target.value) || 0 } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Date" && (
+                    <input type="date" value={props.value || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, value: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Select" && (
+                    <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }}>
+                      {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
                   )}
                   {el.element_type === "Checkbox" && (
                     <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -5932,6 +6014,45 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                 </div>
               )}
 
+              {selectedElement.element_type === "Number" && (
+                <div>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Giá trị</label>
+                  <input type="number" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.value || 0} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, value: parseFloat(e.target.value) || 0 } }); }} />
+                </div>
+              )}
+
+              {selectedElement.element_type === "Date" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Ngày</label>
+                    <input type="date" style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.value || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, value: e.target.value } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Định dạng</label>
+                    <select style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.format || "YYYY-MM-DD"} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, format: e.target.value } }); }}>
+                      <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                      <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                      <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {selectedElement.element_type === "Select" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Tùy chọn (phân cách bởi dấu phẩy)</label>
+                    <textarea style={{ width: "100%", height: "60px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} value={(selectedElement.properties.options || []).join(", ")} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, options: e.target.value.split(",").map(s => s.trim()) } }); }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Chọn giá trị mặc định</label>
+                    <select style={{ width: "100%", padding: "4px 8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", marginTop: "4px", boxSizing: "border-box" }} value={selectedElement.properties.selected || ""} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, selected: e.target.value } }); }}>
+                      {(selectedElement.properties.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               {selectedElement.element_type === "Checkbox" && (
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <input type="checkbox" id="chk-prop" checked={!!selectedElement.properties.checked} onChange={(e) => { saveSnapshot(); updateElement({ ...selectedElement, properties: { ...selectedElement.properties, checked: e.target.checked } }); }} />
@@ -5956,6 +6077,20 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
                 <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Lưới & Căn chỉnh</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
+                    Hiển thị lưới chấm (5mm)
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} />
+                    Hít tọa độ Snap (5mm)
+                  </label>
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>💡 Giữ phím <b>Alt</b> khi kéo để di chuyển tự do.</span>
                 </div>
               </div>
               <div style={{ marginBottom: "16px" }}>
@@ -6025,6 +6160,10 @@ interface TemplateEditorProps {
 
 type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+function snapVal(val: number, step: number = 5): number {
+  return Math.round(val / step) * step;
+}
+
 function ImageElement({ assetId }: { assetId: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
@@ -6032,7 +6171,13 @@ function ImageElement({ assetId }: { assetId: number }) {
       invoke<string>("get_asset_base64", { id: assetId }).then(setSrc).catch(console.error);
     }
   }, [assetId]);
-  return src ? <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>🖼 Ảnh ({assetId})</div>;
+  return src ? (
+    <img src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+  ) : (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", background: "#f8fafc", color: "#64748b", fontSize: "12px" }}>
+      🖼 Ảnh ({assetId})
+    </div>
+  );
 }
 
 export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps) {
@@ -6061,6 +6206,9 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
   });
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+
   const [dragInfo, setDragInfo] = useState<{ elementId: string; offsetX: number; offsetY: number } | null>(null);
   const [resizeInfo, setResizeInfo] = useState<{
     elementId: string; handle: HandleType; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number;
@@ -6083,6 +6231,8 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
   selectedIdRef.current = selectedElementId;
   const editingIdRef = useRef(editingElementId);
   editingIdRef.current = editingElementId;
+  const snapEnabledRef = useRef(snapEnabled);
+  snapEnabledRef.current = snapEnabled;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
   const lastSavedStateRef = useRef<string>(
@@ -6280,6 +6430,7 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     const handlePointerMove = (e: PointerEvent) => {
       if (!canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
+      const isAlt = e.altKey;
 
       if (dragInfo && !resizeInfo) {
         if (scrollContainerRef.current) {
@@ -6291,14 +6442,22 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
 
         const curX = pxToMm(e.clientX - rect.left);
         const curY = pxToMm(e.clientY - rect.top);
-        const newX = Math.max(0, curX - dragInfo.offsetX);
-        const newY = Math.max(0, curY - dragInfo.offsetY);
+        let newX = Math.max(0, curX - dragInfo.offsetX);
+        let newY = Math.max(0, curY - dragInfo.offsetY);
+
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+        }
 
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === dragInfo.elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10 }
+              ? { ...item, position_x_mm: newX, position_y_mm: newY }
               : item
           ),
         }));
@@ -6314,11 +6473,23 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
         if (handle.includes("w")) { const possibleW = initW - deltaX; if (possibleW >= minW) { newW = possibleW; newX = initX + deltaX; } }
         if (handle.includes("n")) { const possibleH = initH - deltaY; if (possibleH >= minH) { newH = possibleH; newY = initY + deltaY; } }
 
+        if (snapEnabledRef.current && !isAlt) {
+          newX = snapVal(newX, 5);
+          newY = snapVal(newY, 5);
+          newW = Math.max(minW, snapVal(newW, 5));
+          newH = Math.max(minH, snapVal(minH, 5));
+        } else {
+          newX = Math.round(newX * 10) / 10;
+          newY = Math.round(newY * 10) / 10;
+          newW = Math.round(newW * 10) / 10;
+          newH = Math.round(newH * 10) / 10;
+        }
+
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
-              ? { ...item, position_x_mm: Math.round(newX * 10) / 10, position_y_mm: Math.round(newY * 10) / 10, width_mm: Math.round(newW * 10) / 10, height_mm: Math.round(newH * 10) / 10 }
+              ? { ...item, position_x_mm: newX, position_y_mm: newY, width_mm: newW, height_mm: newH }
               : item
           ),
         }));
@@ -6366,7 +6537,10 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
         } else {
           saveSnapshot();
           const pageWidth = content.page?.width_mm || 210;
-          const posX = Math.round(((pageWidth - 40) / 2) * 10) / 10;
+          let posX = (pageWidth - 40) / 2;
+          if (snapEnabled) posX = snapVal(posX, 5);
+          else posX = Math.round(posX * 10) / 10;
+
           const newEl: Element = {
             id: Date.now().toString() + "_" + Math.random().toString(36).substring(2, 7),
             element_type: "Image",
@@ -6399,23 +6573,36 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
     setContent((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === el.id ? el : e)) }));
   }
 
-  function addElement(type: "Text" | "Checkbox") {
+  function addElement(type: "Text" | "Number" | "Date" | "Select" | "Checkbox") {
     saveSnapshot();
     const pageWidth = content.page?.width_mm || 210;
     let initialProps: any = { type: "Text", content: "Nhãn mẫu", font_family: "Arial", font_size: 12, is_bold: false, is_italic: false, is_underline: false, alignment: "left" };
     let initialW = 50;
     let initialH = 10;
 
-    if (type === "Checkbox") {
+    if (type === "Number") {
+      initialProps = { type: "Number", value: 0 };
+      initialW = 30;
+    } else if (type === "Date") {
+      initialProps = { type: "Date", value: "", format: "YYYY-MM-DD" };
+      initialW = 40;
+    } else if (type === "Select") {
+      initialProps = { type: "Select", options: ["Option 1", "Option 2"], selected: "Option 1" };
+      initialW = 40;
+    } else if (type === "Checkbox") {
       initialProps = { type: "Checkbox", checked: false };
       initialW = 10;
       initialH = 10;
     }
 
+    let posX = (pageWidth - initialW) / 2;
+    if (snapEnabled) posX = snapVal(posX, 5);
+    else posX = Math.round(posX * 10) / 10;
+
     const newEl: Element = {
       id: Date.now().toString(),
       element_type: type,
-      position_x_mm: Math.round(((pageWidth - initialW) / 2) * 10) / 10,
+      position_x_mm: posX,
       position_y_mm: 25,
       width_mm: initialW,
       height_mm: initialH,
@@ -6454,7 +6641,20 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
         <div ref={scrollContainerRef} style={{ flex: 1, overflow: "auto", padding: "48px 32px 80px 32px", display: "flex", justifyContent: "center", alignItems: "flex-start", backgroundColor: "#f1f5f9" }} onClick={() => setSelectedElementId(null)}>
-          <div ref={canvasRef} style={{ width: `${mmToPx(content.page?.width_mm || 210)}px`, height: `${mmToPx(content.page?.height_mm || 297)}px`, backgroundColor: "#ffffff", borderRadius: "2px", position: "relative", border: "1px solid #e2e8f0", boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)" }} onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
+          <div
+            ref={canvasRef}
+            style={{
+              width: `${mmToPx(content.page?.width_mm || 210)}px`,
+              height: `${mmToPx(content.page?.height_mm || 297)}px`,
+              backgroundColor: "#ffffff",
+              borderRadius: "2px",
+              position: "relative",
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04)",
+              backgroundImage: showGrid ? "radial-gradient(#cbd5e1 1px, transparent 1px)" : "none",
+              backgroundSize: `${mmToPx(5)}px ${mmToPx(5)}px`,
+            }}
+            onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}>
             {content.elements.map((el) => {
               const props = (el.properties as any) || {};
               const isEditing = editingElementId === el.id;
@@ -6497,6 +6697,17 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
                 >
                   {el.element_type === "Text" && (
                     <textarea value={props.content || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, content: e.target.value } })} onBlur={() => setEditingElementId(null)} onPointerDown={(e) => e.stopPropagation()} style={{ width: "100%", height: "100%", border: "none", background: "transparent", resize: "none", outline: "none", pointerEvents: isEditing ? "auto" : "none", fontWeight: props.is_bold ? "bold" : "normal", fontStyle: props.is_italic ? "italic" : "normal", textDecoration: props.is_underline ? "underline" : "none", textAlign: props.alignment || "left", fontSize: props.font_size ? `${props.font_size}px` : "12px" }} />
+                  )}
+                  {el.element_type === "Number" && (
+                    <input type="number" value={props.value || 0} onChange={(e) => updateElement({ ...el, properties: { ...props, value: parseFloat(e.target.value) || 0 } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Date" && (
+                    <input type="date" value={props.value || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, value: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }} />
+                  )}
+                  {el.element_type === "Select" && (
+                    <select value={props.selected || ""} onChange={(e) => updateElement({ ...el, properties: { ...props, selected: e.target.value } })} style={{ width: "100%", height: "100%", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "4px" }}>
+                      {(props.options || []).map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
                   )}
                   {el.element_type === "Checkbox" && <input type="checkbox" checked={!!props.checked} onChange={(e) => updateElement({ ...el, properties: { ...props, checked: e.target.checked } })} onPointerDown={(e) => e.stopPropagation()} style={{ cursor: "pointer", width: "18px", height: "18px" }} />}
                   {el.element_type === "Image" && <ImageElement assetId={props.asset_id}/>}
@@ -6605,6 +6816,20 @@ export function TemplateEditor({ initialTemplate, onClose }: TemplateEditorProps
                 <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: !isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: !isLandscape ? 600 : 400 }} onClick={() => setOrientation("portrait")}>📄 Dọc (210×297)</button>
                   <button style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", background: isLandscape ? "#dbeafe" : "#ffffff", fontSize: "12px", cursor: "pointer", fontWeight: isLandscape ? 600 : 400 }} onClick={() => setOrientation("landscape")}>📃 Ngang (297×210)</button>
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>Lưới & Căn chỉnh</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
+                    Hiển thị lưới chấm (5mm)
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#334155", cursor: "pointer" }}>
+                    <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} />
+                    Hít tọa độ Snap (5mm)
+                  </label>
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>💡 Giữ phím <b>Alt</b> khi kéo để di chuyển tự do.</span>
                 </div>
               </div>
               <div style={{ marginBottom: "16px" }}>

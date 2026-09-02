@@ -125,7 +125,6 @@ impl TemplateRepo {
         let default_content = DocumentContent::default_content();
 
         for name in templates.iter() {
-            // Find existing
             let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
                 "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
                 (user_id, *name),
@@ -144,8 +143,6 @@ impl TemplateRepo {
 
             match existing_template_res {
                 Ok(template) => {
-                    // Repair ONLY if name is "Bug Report", "Test Case", or "Meeting Notes",
-                    // and template was never modified (created_at == updated_at)
                     if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
                         && template.created_at == template.updated_at
                     {
@@ -254,25 +251,21 @@ fn create_date_el(label: &str, x: f64, y: f64) -> Element {
     }
 }
 
-
 pub struct DocumentRepo;
 
 impl DocumentRepo {
     pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
         let content_to_store = if let Some(template_id) = source_template_id {
-            // Fetch template content
             let template_metadata: String = conn.query_row(
                 "SELECT metadata FROM templates WHERE id = ?1",
                 [template_id],
                 |row| row.get(0),
             )?;
             
-            // Try parsing as DocumentContent first (handles modern/correct data)
             if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
                 serde_json::to_string(&doc_content)
                     .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
             } else {
-                // If that fails, it's legacy data, copy as is
                 template_metadata
             }
         } else {
@@ -311,6 +304,14 @@ impl DocumentRepo {
         conn.execute(
             "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
             (id, user_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update(conn: &Connection, id: i64, metadata: &str) -> Result<(), AppError> {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
         )?;
         Ok(())
     }
