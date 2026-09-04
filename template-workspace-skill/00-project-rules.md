@@ -16,7 +16,7 @@ MVP manages:
 - Template metadata
 - Document editing
 - Local ownership
-- DOCX export
+- PDF export
 
 MVP does not manage:
 - projects
@@ -190,13 +190,7 @@ Advanced search is out of scope.
 
 ## Export
 
-DOCX is mandatory.
-
-PDF is not mandatory.
-
-DOCX rendering must be validated by a Technical Spike before the full editor is built.
-
-The DOCX output must be visually acceptable relative to the editor for the supported MVP elements.
+PDF is mandatory via jsPDF. DOCX rendering failed the technical spike and is permanently out of scope.
 
 ## Seed templates
 
@@ -215,7 +209,6 @@ Provide:
 - cloud sync
 - payments
 - template versioning
-- DOCX import
 - template import/export
 - complex tables
 - advanced search

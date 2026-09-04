@@ -45,7 +45,7 @@ export interface Element {
   properties: ElementProperties;
 }
 
-export type ElementType = "Text" | "Number" | "Date" | "Select" | "Checkbox" | "Image";
+export type ElementType = "Text" | "Checkbox" | "Image";
 
 export type ElementProperties = any; // simplified for phase 06 UI
 

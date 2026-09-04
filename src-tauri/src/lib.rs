@@ -92,7 +92,7 @@ fn update_template(
 
     // Verify ownership
     let template: models::Template = conn.query_row(
-        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE id = ?1",
+        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE id = ?1",
         [id],
         |row| Ok(models::Template {
             id: row.get(0)?,
@@ -102,8 +102,9 @@ fn update_template(
             category_id: row.get(4)?,
             thumbnail_asset_id: row.get(5)?,
             metadata: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            is_system: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     )?;
 

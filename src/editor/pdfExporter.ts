@@ -3,20 +3,16 @@ import { DocumentContent } from "../App";
 import { invoke } from "@tauri-apps/api/core";
 
 async function loadUnicodeFont(doc: jsPDF) {
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Font loading timed out")), 5000)
-  );
-
   try {
-    const fontUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf";
-    const fontBoldUrl = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Medium.ttf";
-    
-    const [regularBuffer, boldBuffer] = await Promise.race([
-      Promise.all([
-        fetch(fontUrl).then(res => res.arrayBuffer()),
-        fetch(fontBoldUrl).then(res => res.arrayBuffer()),
-      ]),
-      timeoutPromise as Promise<[ArrayBuffer, ArrayBuffer]>
+    const [regularBuffer, boldBuffer] = await Promise.all([
+      fetch("/fonts/Roboto-Regular.ttf").then((res) => {
+        if (!res.ok) throw new Error("Không thể tải font Regular nội bộ");
+        return res.arrayBuffer();
+      }),
+      fetch("/fonts/Roboto-Bold.ttf").then((res) => {
+        if (!res.ok) throw new Error("Không thể tải font Bold nội bộ");
+        return res.arrayBuffer();
+      }),
     ]);
 
     const toBase64 = (buf: ArrayBuffer) => {
@@ -33,16 +29,15 @@ async function loadUnicodeFont(doc: jsPDF) {
 
     doc.addFileToVFS("Roboto-Bold.ttf", toBase64(boldBuffer));
     doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
-    
+
     doc.setFont("Roboto", "normal");
   } catch (err) {
-    console.warn("--> Không thể tải font Unicode, dùng font mặc định:", err);
+    console.warn("--> Dùng font helvetica dự phòng:", err);
     doc.setFont("helvetica", "normal");
   }
 }
 
 export async function exportToPdf(content: DocumentContent, fileName: string) {
-  console.log("--> Bắt đầu khởi tạo PDF với nội dung:", content);
   try {
     if (!content || !content.page) {
       throw new Error("Dữ liệu tài liệu không hợp lệ!");
@@ -60,11 +55,6 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
 
     await loadUnicodeFont(doc);
 
-    // Cache to hold Base64 data for images during export
-    // const imageCache: Record<number, string> = {};
-
-    console.log(`--> Đang vẽ ${content.elements.length} phần tử lên PDF...`);
-
     for (const el of content.elements) {
       const x = el.position_x_mm || 0;
       const y = el.position_y_mm || 0;
@@ -75,33 +65,14 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
       switch (el.element_type) {
         case "Text": {
           doc.setFontSize(props.font_size || 12);
-          const isBold = props.is_bold;
-          doc.setFont("Roboto", isBold ? "bold" : "normal");
+          doc.setFont("Roboto", props.is_bold ? "bold" : "normal");
           doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
-          break;
-        }
-        case "Number": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.value ?? 0), x, y, { baseline: "top" });
-          break;
-        }
-        case "Date": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.value || "DD/MM/YYYY"), x, y, { baseline: "top" });
-          break;
-        }
-        case "Select": {
-          doc.setFontSize(12);
-          doc.setFont("Roboto", "normal");
-          doc.text(String(props.selected || "-"), x, y, { baseline: "top" });
           break;
         }
         case "Checkbox": {
           doc.rect(x, y, Math.min(w, h, 6), Math.min(w, h, 6));
           if (props.checked) {
-            doc.setFontSize(12);
+            doc.setFontSize(10);
             doc.setFont("Roboto", "bold");
             doc.text("X", x + 1.2, y + 1.2, { baseline: "top" });
           }
@@ -114,9 +85,7 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
               const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
               doc.addImage(dataUrl, "PNG", x, y, w, h);
             } catch (err) {
-              console.warn("Không thể nhúng ảnh PDF #" + assetId, err);
               doc.rect(x, y, w, h);
-              doc.text("[Image]", x + 2, y + 2, { baseline: "top" });
             }
           } else {
             doc.rect(x, y, w, h);
@@ -127,18 +96,7 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
     }
 
     const safeName = (fileName || "document").replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf";
-
-    const blob = doc.output("blob");
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = safeName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    
-    console.log("--> Xuất PDF thành công:", safeName);
+    doc.save(safeName);
   } catch (err: any) {
     console.error("--> Lỗi khi xuất PDF:", err);
     throw err;

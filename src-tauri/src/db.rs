@@ -36,6 +36,7 @@ pub fn init_db_connection<P: AsRef<Path>>(path: P) -> Result<Connection, rusqlit
     let mut migrations = vec![
         ("001_initial.sql", include_str!("migrations/001_initial.sql")),
         ("002_add_timestamps.sql", include_str!("migrations/002_add_timestamps.sql")),
+        ("003_add_system_flag.sql", include_str!("migrations/003_add_system_flag.sql")),
     ];
     
     // Create migration table to track applied migrations
@@ -69,6 +70,7 @@ pub fn init_db_in_memory() -> Result<Connection, rusqlite::Error> {
     let migrations = vec![
         ("001_initial.sql", include_str!("migrations/001_initial.sql")),
         ("002_add_timestamps.sql", include_str!("migrations/002_add_timestamps.sql")),
+        ("003_add_system_flag.sql", include_str!("migrations/003_add_system_flag.sql")),
     ];
     
     // Create migration table to track applied migrations

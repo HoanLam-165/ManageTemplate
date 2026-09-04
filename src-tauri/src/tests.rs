@@ -185,11 +185,20 @@ mod tests {
         let user_id = UserRepo::create(&conn, "testuser", "password").expect("Failed to create user");
         TemplateRepo::seed_for_user(&conn, user_id).unwrap();
 
+        // Seed adds 4 templates, but they are all in the 'system' list now, so user count should be 0.
+        assert_eq!(TemplateRepo::count_for_user(&conn, user_id).unwrap(), 0);
+
+        // Add 3 templates successfully.
+        let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
+        TemplateRepo::create(&conn, user_id, "User Template 1", None, &default_content).unwrap();
+        TemplateRepo::create(&conn, user_id, "User Template 2", None, &default_content).unwrap();
+        TemplateRepo::create(&conn, user_id, "User Template 3", None, &default_content).unwrap();
+        
         assert_eq!(TemplateRepo::count_for_user(&conn, user_id).unwrap(), 3);
 
-        let default_content = serde_json::to_string(&DocumentContent::default_content()).unwrap();
-        let result = TemplateRepo::create(&conn, user_id, "New Template", None, &default_content);
-        assert!(result.is_err());
+        // 4th template should fail.
+        let result = TemplateRepo::create(&conn, user_id, "User Template 4", None, &default_content);
+        assert!(result.is_err(), "Should fail to create 4th user template");
     }
 
     #[test]

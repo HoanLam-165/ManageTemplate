@@ -16,6 +16,7 @@ pub struct Template {
     pub category_id: Option<i64>,
     pub thumbnail_asset_id: Option<i64>,
     pub metadata: String,
+    pub is_system: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -95,9 +96,6 @@ pub struct Element {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ElementType {
     Text,
-    Number,
-    Date,
-    Select,
     Checkbox,
     Image,
 }
@@ -114,9 +112,6 @@ pub enum ElementProperties {
         is_underline: bool,
         alignment: String 
     },
-    Number { value: f64 },
-    Date { value: String, format: String },
-    Select { options: Vec<String>, selected: Option<String> },
     Checkbox { checked: bool },
     Image { asset_id: i64 },
 }

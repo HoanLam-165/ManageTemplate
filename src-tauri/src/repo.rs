@@ -42,14 +42,14 @@ impl TemplateRepo {
             }
         }
         conn.execute(
-            "INSERT INTO templates (user_id, name, description, metadata) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 0)",
             (user_id, name, description, metadata),
         )?;
         Ok(conn.last_insert_rowid())
     }
 
     pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Template>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1")?;
         let template_iter = stmt.query_map([user_id], |row| {
             Ok(Template {
                 id: row.get(0)?,
@@ -59,8 +59,9 @@ impl TemplateRepo {
                 category_id: row.get(4)?,
                 thumbnail_asset_id: row.get(5)?,
                 metadata: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                is_system: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })?;
         
@@ -73,7 +74,7 @@ impl TemplateRepo {
 
     pub fn search_by_user(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Template>, AppError> {
         let pattern = format!("%{}%", query);
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
         let template_iter = stmt.query_map((user_id, pattern), |row| {
             Ok(Template {
                 id: row.get(0)?,
@@ -83,8 +84,9 @@ impl TemplateRepo {
                 category_id: row.get(4)?,
                 thumbnail_asset_id: row.get(5)?,
                 metadata: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                is_system: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })?;
         
@@ -97,7 +99,7 @@ impl TemplateRepo {
 
     pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64, AppError> {
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND name != 'Blank Template'",
+            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND is_system = 0",
             [user_id],
             |row| row.get(0),
         )?;
@@ -126,7 +128,7 @@ impl TemplateRepo {
 
         for name in templates.iter() {
             let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
-                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
+                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
                 (user_id, *name),
                 |row| Ok(Template {
                     id: row.get(0)?,
@@ -136,8 +138,9 @@ impl TemplateRepo {
                     category_id: row.get(4)?,
                     thumbnail_asset_id: row.get(5)?,
                     metadata: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    is_system: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             );
 
@@ -161,7 +164,10 @@ impl TemplateRepo {
                     } else {
                         get_populated_content(name)
                     };
-                    Self::create(conn, user_id, name, None, &serde_json::to_string(&content)?)?;
+                    conn.execute(
+                        "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 1)",
+                        (user_id, name, None::<String>, &serde_json::to_string(&content)?),
+                    )?;
                 },
                 Err(e) => return Err(AppError::from(e)),
             }
@@ -180,7 +186,7 @@ pub fn get_populated_content(name: &str) -> DocumentContent {
                 create_text_el("Các bước tái hiện", 10.0, 40.0),
                 create_text_el("Kết quả mong đợi", 10.0, 55.0),
                 create_text_el("Kết quả thực tế", 10.0, 70.0),
-                create_number_el("Độ nghiêm trọng (1-5)", 10.0, 85.0),
+                create_text_el("Độ nghiêm trọng", 10.0, 85.0),
             ];
         },
         "Test Case" => {
@@ -196,7 +202,7 @@ pub fn get_populated_content(name: &str) -> DocumentContent {
         "Meeting Notes" => {
             content.elements = vec![
                 create_text_el("Tiêu đề cuộc họp", 10.0, 10.0),
-                create_date_el("Ngày", 10.0, 25.0),
+                create_text_el("Ngày", 10.0, 25.0),
                 create_text_el("Người tham gia", 10.0, 40.0),
                 create_text_el("Nội dung", 10.0, 55.0),
                 create_text_el("Kết luận", 10.0, 70.0),
@@ -224,30 +230,6 @@ fn create_text_el(content: &str, x: f64, y: f64) -> Element {
             is_underline: false,
             alignment: "left".into(),
         }
-    }
-}
-
-fn create_number_el(label: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", label),
-        element_type: ElementType::Number,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Number { value: 0.0 }
-    }
-}
-
-fn create_date_el(label: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", label),
-        element_type: ElementType::Date,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Date { value: "".into(), format: "YYYY-MM-DD".into() }
     }
 }
 
