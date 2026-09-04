@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import { Search, Plus, FileText, LayoutTemplate, Trash2, Edit3, Download, LogOut, Layers } from "lucide-react";
 import { Template, Document } from "./App";
-import { EditorView } from "./EditorView";
-import { TemplateEditor } from "./TemplateEditor";
 import { exportToPdf } from "./editor/pdfExporter";
 import { useToast } from "./components/Toast";
 
@@ -17,9 +17,6 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
   const [searchTerm, setSearchTerm] = useState("");
-  const [editingDocId, setEditingDocId] = useState<number | null>(null);
-  const [editingTemplate, setEditingTemplate] = useState<Template | "new" | null>(null);
-  
   const [modal, setModal] = useState<{ type: "prompt" | "confirm"; message: string; onConfirm: (val?: string) => void; onCancel: () => void; } | null>(null);
   const [inputValue, setInputValue] = useState("");
 
@@ -35,6 +32,12 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
 
   useEffect(() => {
     loadData();
+    const unlisten = listen("item-saved", () => {
+      loadData();
+    });
+    return () => {
+      unlisten.then(f => f());
+    };
   }, [activeTab]);
 
   async function loadData() {
@@ -45,16 +48,50 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
     }
   }
 
+  const openAppWindow = async (label: string, path: string, title: string) => {
+    showToast(`Đang mở: ${title}...`, "loading");
+    try {
+      const existingWin = await WebviewWindow.getByLabel(label);
+      if (existingWin) {
+        await existingWin.setFocus();
+        showToast("Đã chuyển sang cửa sổ đang mở!", "success");
+        return;
+      }
+
+      const win = new WebviewWindow(label, {
+        url: path,
+        title: title,
+        width: 1280,
+        height: 800,
+        minWidth: 960,
+        minHeight: 640,
+      });
+
+      win.once("tauri://created", () => {
+        showToast("Đã mở cửa sổ thành công!", "success");
+      });
+
+      win.once("tauri://error", (e) => {
+        console.error("Window Error:", e);
+        showToast(`Lỗi tạo cửa sổ: ${JSON.stringify(e)}`, "error");
+      });
+    } catch (err) {
+      console.error("Open Window Exception:", err);
+      showToast(`Lỗi hệ thống: ${String(err)}`, "error");
+    }
+  };
+
   async function useTemplate(templateId: number) {
     setModal({
       type: "prompt",
       message: "Nhập tên tài liệu mới:",
       onConfirm: async (name) => {
         if (name) {
-          await invoke("create_document", { name, templateId });
+          const docId = await invoke<number>("create_document", { name, templateId });
           setActiveTab("documents");
           loadData();
           setModal(null);
+          openAppWindow(`document-${docId}`, `/#/document/${docId}`, `Document: ${name}`);
         }
       },
       onCancel: () => setModal(null)
@@ -76,31 +113,19 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
 
   const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
-  if (editingDocId !== null) {
-    return <EditorView documentId={editingDocId} onClose={() => { setEditingDocId(null); loadData(); }} />;
-  }
-
-  if (editingTemplate !== null) {
-    return (
-      <TemplateEditor
-        initialTemplate={editingTemplate === "new" ? undefined : editingTemplate}
-        onClose={() => { setEditingTemplate(null); loadData(); }}
-      />
-    );
-  }
-
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#fafafa" }}>
+      <style>{` .actions { opacity: 0 !important; transition: opacity 0.2s; } .document-card:hover .actions { opacity: 1 !important; } `}</style>
       <nav style={{ height: "64px", backgroundColor: "#ffffff", borderBottom: "1px solid #e4e4e7", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", fontWeight: "600", fontSize: "16px", color: "#18181b" }}>
-          <Layers size={20} /> Template Workspace
+          <Layers size={20}/> Template Workspace
         </div>
         <div style={{ display: "flex", gap: "4px", backgroundColor: "#f4f4f5", padding: "4px", borderRadius: "8px" }}>
           <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", color: activeTab === "templates" ? "#18181b" : "#71717a", boxShadow: activeTab === "templates" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("templates")}>Templates</button>
           <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", color: activeTab === "documents" ? "#18181b" : "#71717a", boxShadow: activeTab === "documents" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("documents")}>Documents</button>
         </div>
         <button style={{ background: "none", border: "1px solid #e4e4e7", color: "#71717a", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }} onClick={onLogout}>
-          <LogOut size={14} /> Logout
+          <LogOut size={14}/> Logout
         </button>
       </nav>
 
@@ -109,10 +134,10 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
           <h2 style={{ fontSize: "18px", fontWeight: "600", margin: "0", color: "#18181b" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
           <div style={{ display: "flex", gap: "12px" }}>
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-              <Search size={16} style={{ position: "absolute", left: "10px", color: "#a1a1aa" }} />
+              <Search color="#a1a1aa" size={16} style={{ position: "absolute", left: "10px" }} />
               <input style={{ padding: "8px 12px 8px 32px", borderRadius: "8px", border: "1px solid #e4e4e7", fontSize: "13px", width: "200px" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
-            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#18181b", color: "white", border: "none", borderRadius: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", display: "flex", alignItems: "center", gap: "6px" }} onClick={() => setEditingTemplate("new")}><Plus size={16} /> Tạo mới</button>}
+            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#18181b", color: "white", border: "none", borderRadius: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", display: "flex", alignItems: "center", gap: "6px" }} onClick={() => openAppWindow("template-new", "/#/template/new", "Tạo Template Mới")}><Plus size={16}/> Tạo mới</button>}
           </div>
         </div>
 
@@ -121,28 +146,27 @@ export function LibraryView({ onLogout }: LibraryViewProps) {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
             {filteredData.map((item: any) => (
-              <div key={item.id} style={{ backgroundColor: "#ffffff", padding: "20px", borderRadius: "10px", border: "1px solid #e4e4e7", display: "flex", flexDirection: "column", gap: "16px", transition: "border 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#a1a1aa"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e4e4e7"; }}>
+              <div key={item.id} className="document-card" style={{ backgroundColor: "#ffffff", padding: "20px", borderRadius: "10px", border: "1px solid #e4e4e7", display: "flex", flexDirection: "column", gap: "16px", transition: "border 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#a1a1aa"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e4e4e7"; }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
                   <div style={{ fontSize: "15px", fontWeight: "600", color: "#18181b" }}>{item.name}</div>
-                  <div style={{ color: "#a1a1aa" }}>{activeTab === "templates" ? <LayoutTemplate size={18} /> : <FileText size={18} />}</div>
+                  <div style={{ color: "#a1a1aa" }}>{activeTab === "templates" ? <LayoutTemplate size={18}/> : <FileText size={18}/>}</div>
                 </div>
                 <div style={{ fontSize: "13px", color: "#71717a" }}>{item.description || "Không có mô tả"}</div>
                 <div style={{ marginTop: "auto", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px", opacity: 0, transition: "opacity 0.2s" }} className="actions">
                   {activeTab === "templates" ? (
                     <>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)} title="Dùng"><FileText size={16} /></button>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingTemplate(item)} title="Sửa"><Edit3 size={16} /></button>
-                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)} title="Xóa"><Trash2 size={16} /></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)} title="Dùng"><FileText size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`template-${item.id}`, `/#/template/${item.id}`, `Template: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)} title="Xóa"><Trash2 size={16}/></button>
                     </>
                   ) : (
                     <>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setEditingDocId(item.id)} title="Sửa"><Edit3 size={16} /></button>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)} title="Xuất PDF"><Download size={16} /></button>
-                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)} title="Xóa"><Trash2 size={16} /></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`document-${item.id}`, `/#/document/${item.id}`, `Document: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)} title="Xuất PDF"><Download size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)} title="Xóa"><Trash2 size={16}/></button>
                     </>
                   )}
                 </div>
-                <style>{` .actions { opacity: 0 !important; } .actions:hover, div:hover .actions { opacity: 1 !important; } `}</style>
               </div>
             ))}
           </div>

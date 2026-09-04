@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { 
-  ArrowLeft, Type, CheckSquare, Image as ImageIcon, FileDown, Save, 
+import { emit } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {   ArrowLeft, Type, CheckSquare, Image as ImageIcon, FileDown, Save, 
   Copy, Trash2, Sliders, Bold, Italic, Underline, AlignLeft, 
   AlignCenter, AlignRight, Columns, Rows, Layers, RefreshCw,
   ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown
@@ -83,6 +84,7 @@ export function SharedWorkspace({
   snapEnabledRef.current = snapEnabled;
   const clipboardRef = useRef<Element | null>(null);
   const historyRef = useRef<DocumentContent[]>([]);
+  const isForceClosingRef = useRef(false);
 
   const checkIsDirty = (): boolean => {
     const currentMeta = {
@@ -93,6 +95,19 @@ export function SharedWorkspace({
     return lastSavedStateRef.current !== JSON.stringify(currentMeta);
   };
 
+  useEffect(() => {
+    // Quản lý trực tiếp Promise để đảm bảo Cleanup an toàn trong React Strict Mode
+    const unlistenPromise = getCurrentWindow().onCloseRequested((event) => {
+      if (!isForceClosingRef.current && checkIsDirty()) {
+        event.preventDefault();
+        setShowCloseModal(true);
+      }
+    });
+
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
   const handleBack = () => {
     if (checkIsDirty()) {
       setShowCloseModal(true);
@@ -376,6 +391,7 @@ export function SharedWorkspace({
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#ffffff", overflow: "hidden" }}>
+      <style>{` .layer-actions { opacity: 0; transition: opacity 0.2s; } .layer-item:hover .layer-actions { opacity: 1; } `}</style>
       {ToastComponent}
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 16px", height: "48px", backgroundColor: "#ffffff", borderBottom: "1px solid #e4e4e7", zIndex: 30 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -395,7 +411,12 @@ export function SharedWorkspace({
         <div style={{ display: "flex", gap: "8px" }}>
           <button onClick={() => setShowRightSidebar(!showRightSidebar)} style={{ backgroundColor: showRightSidebar ? "#f4f4f5" : "#ffffff", border: "1px solid #e4e4e7", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }} title="Ẩn/Hiện bảng thiết lập"><Sliders size={16}/> Thiết lập</button>
           <button style={{ backgroundColor: "#ffffff", border: "1px solid #e4e4e7", color: "#18181b", padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }} onClick={handleExportPdf}><FileDown size={16}/> Xuất PDF</button>
-          <button style={{ backgroundColor: "#18181b", color: "white", fontWeight: 500, padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }} onClick={async () => { await onSave(); lastSavedStateRef.current = JSON.stringify({ name, ...(mode === "template" ? { description } : {}), content }); }}><Save size={16}/> Lưu</button>
+          <button style={{ backgroundColor: "#18181b", color: "white", fontWeight: 500, padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }} onClick={async () => { 
+            await onSave(); 
+            lastSavedStateRef.current = JSON.stringify({ name, ...(mode === "template" ? { description } : {}), content }); 
+            await emit("item-saved");
+            showToast("Đã lưu thành công!", "success");
+          }}><Save size={16}/> Lưu</button>
           {mode === "template" && onSaveAsNew && (
             <button style={{ backgroundColor: "#ffffff", border: "1px solid #e4e4e7", color: "#18181b", padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }} onClick={onSaveAsNew}><Copy size={16}/> Save As</button>
           )}
@@ -409,13 +430,14 @@ export function SharedWorkspace({
               <Layers size={16}/> Lớp phần tử ({content.elements.length})
             </div>
             <div style={{ flex: 1, overflowY: "auto" }}>
-              {content.elements.map((el) => {
+              {[...content.elements].reverse().map((el) => {
                 const isSelected = selectedElementId === el.id;
                 const Icon = el.element_type === "Text" ? Type : el.element_type === "Checkbox" ? CheckSquare : ImageIcon;
                 return (
                   <div 
                     key={el.id}
                     id={`layer-item-${el.id}`}
+                    className="layer-item"
                     onClick={() => {
                       setSelectedElementId(el.id);
                       const canvasItem = document.getElementById(`canvas-item-${el.id}`);
@@ -434,7 +456,9 @@ export function SharedWorkspace({
                     <span style={{ fontSize: "13px", color: isSelected ? "#18181b" : "#4b5563", flex: 1 }}>{el.element_type}</span>
                     <div style={{ fontSize: "11px", color: "#a1a1aa" }}>{el.position_x_mm}x{el.position_y_mm}</div>
                     <div style={{ opacity: 0, display: "flex", gap: "4px" }} className="layer-actions">
-                      <button style={{ border: "none", background: "none", cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); saveSnapshot(); setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== el.id) })); }}><Trash2 size={12}/></button>
+                      <button style={{ border: "none", background: "none", cursor: "pointer" }} title="Lên 1 lớp" onClick={(e) => { e.stopPropagation(); moveElement(el.id, "forward"); }}><ArrowUp size={12}/></button>
+                      <button style={{ border: "none", background: "none", cursor: "pointer" }} title="Xuống 1 lớp" onClick={(e) => { e.stopPropagation(); moveElement(el.id, "backward"); }}><ArrowDown size={12}/></button>
+                      <button style={{ border: "none", background: "none", cursor: "pointer", color: "#dc2626" }} title="Xóa" onClick={(e) => { e.stopPropagation(); saveSnapshot(); setContent((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== el.id) })); }}><Trash2 size={12}/></button>
                     </div>
                     <style>{` .layer-actions { opacity: 0; } div:hover .layer-actions { opacity: 1; } `}</style>
                   </div>
@@ -461,7 +485,7 @@ export function SharedWorkspace({
             }}
             onClick={(e) => { e.stopPropagation(); setSelectedElementId(null); }}
           >
-            {content.elements.map((el) => {
+            {content.elements.map((el, index) => {
               const props = (el.properties as any) || {};
               const isEditing = editingElementId === el.id;
               const isSelected = selectedElementId === el.id;
@@ -475,6 +499,7 @@ export function SharedWorkspace({
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedElementId(el.id); setContextMenu({ x: e.clientX, y: e.clientY, elementId: el.id }); }}
                   style={{
                     position: "absolute",
+                    zIndex: index + 1,
                     left: `${mmToPx(el.position_x_mm)}px`,
                     top: `${mmToPx(el.position_y_mm)}px`,
                     width: `${mmToPx(el.width_mm)}px`,
@@ -633,7 +658,7 @@ export function SharedWorkspace({
       </div>
 
       {contextMenu && (
-        <div style={{ position: "fixed", top: contextMenu.y, left: contextMenu.x, backgroundColor: "white", border: "1px solid #e4e4e7", borderRadius: "8px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)", padding: "4px", zIndex: 100 }}>
+        <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "fixed", top: contextMenu.y, left: contextMenu.x, backgroundColor: "white", border: "1px solid #e4e4e7", borderRadius: "8px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)", padding: "4px", zIndex: 100 }}>
           <button style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "8px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => moveElement(contextMenu.elementId, "front")}><ArrowUpToLine size={14}/> Lên trên cùng</button>
           <button style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "8px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => moveElement(contextMenu.elementId, "forward")}><ArrowUp size={14}/> Lên một lớp</button>
           <button style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "8px", border: "none", background: "none", cursor: "pointer", fontSize: "13px" }} onClick={() => moveElement(contextMenu.elementId, "backward")}><ArrowDown size={14}/> Xuống một lớp</button>
@@ -651,8 +676,8 @@ export function SharedWorkspace({
             <p style={{ fontSize: "14px", color: "#71717a", marginBottom: "24px" }}>Bạn có muốn lưu các thay đổi trước khi thoát không?</p>
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
               <button style={{ padding: "8px 12px", borderRadius: "6px", border: "1px solid #e4e4e7", background: "white", cursor: "pointer" }} onClick={() => setShowCloseModal(false)}>Hủy</button>
-              <button style={{ padding: "8px 12px", borderRadius: "6px", border: "none", background: "#fef2f2", color: "#991b1b", cursor: "pointer" }} onClick={onClose}>Không lưu</button>
-              <button style={{ padding: "8px 12px", borderRadius: "6px", border: "none", background: "#18181b", color: "white", cursor: "pointer" }} onClick={async () => { await onSave(); onClose(); }}>Lưu và thoát</button>
+              <button style={{ padding: "8px 12px", borderRadius: "6px", border: "none", background: "#fef2f2", color: "#991b1b", cursor: "pointer" }} onClick={() => { isForceClosingRef.current = true; onClose(); }}>Không lưu</button>
+              <button style={{ padding: "8px 12px", borderRadius: "6px", border: "none", background: "#18181b", color: "white", cursor: "pointer" }} onClick={async () => { await onSave(); isForceClosingRef.current = true; onClose(); }}>Lưu và thoát</button>
             </div>
           </div>
         </div>
