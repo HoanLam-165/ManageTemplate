@@ -4,11 +4,10 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft,
+  Menu,
   Type,
   CheckSquare,
   Image as ImageIcon,
-  FileDown,
-  Save,
   Copy,
   Trash2,
   Sliders,
@@ -50,6 +49,22 @@ type HandleType = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 function snapVal(val: number, step: number = 5): number {
   return Math.round(val / step) * step;
+}
+
+function deepEqual(obj1: any, obj2: any): boolean {
+  if (obj1 === obj2) return true;
+  if (typeof obj1 !== "object" || typeof obj2 !== "object" || obj1 == null || obj2 == null) return false;
+
+  const keys1 = Object.keys(obj1);
+  const keys2 = Object.keys(obj2);
+
+  if (keys1.length !== keys2.length) return false;
+
+  for (const key of keys1) {
+    if (!keys2.includes(key)) return false;
+    if (!deepEqual(obj1[key], obj2[key])) return false;
+  }
+  return true;
 }
 
 function ImageElement({ assetId }: { assetId: number }) {
@@ -116,6 +131,8 @@ export function SharedWorkspace({
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
   const [showLeftSidebar, setShowLeftSidebar] = useState<boolean>(true);
   const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
+  const [zoom, setZoom] = useState<number>(1);
+  const zoomRef = useRef(zoom);
 
   const [dragInfo, setDragInfo] = useState<{
     elementId: string;
@@ -138,6 +155,7 @@ export function SharedWorkspace({
     elementId: string;
   } | null>(null);
   const [showCloseModal, setShowCloseModal] = useState<boolean>(false);
+  const [showFileMenu, setShowFileMenu] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -159,7 +177,8 @@ export function SharedWorkspace({
     selectedIdRef.current = selectedElementId;
     editingIdRef.current = editingElementId;
     snapEnabledRef.current = snapEnabled;
-  }, [content, name, selectedElementId, editingElementId, snapEnabled]);
+    zoomRef.current = zoom;
+  }, [content, name, selectedElementId, editingElementId, snapEnabled, zoom]);
 
   const checkIsDirty = (): boolean => {
     const currentMeta = {
@@ -167,7 +186,12 @@ export function SharedWorkspace({
       ...(mode === "template" ? { description } : {}),
       content: contentRef.current,
     };
-    return lastSavedStateRef.current !== JSON.stringify(currentMeta);
+    try {
+      const lastSaved = JSON.parse(lastSavedStateRef.current);
+      return !deepEqual(currentMeta, lastSaved);
+    } catch (e) {
+      return lastSavedStateRef.current !== JSON.stringify(currentMeta);
+    }
   };
 
   useEffect(() => {
@@ -235,19 +259,11 @@ export function SharedWorkspace({
     saveSnapshot();
     const source = clipboardRef.current;
 
-    let scrollYPx = scrollContainerRef.current
-      ? scrollContainerRef.current.scrollTop
-      : 0;
-    let targetYPx = Math.max(0, scrollYPx - 48) + 80;
-    let posY = pxToMm(targetYPx);
-    if (snapEnabledRef.current) posY = snapVal(posY, 5);
-    else posY = Math.round(posY * 10) / 10;
-
     const newEl: Element = {
       ...structuredClone(source),
       id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       position_x_mm: source.position_x_mm + 5,
-      position_y_mm: posY,
+      position_y_mm: source.position_y_mm + 5,
     };
     clipboardRef.current = structuredClone(newEl);
     setContent((prev) => ({ ...prev, elements: [...prev.elements, newEl] }));
@@ -281,8 +297,28 @@ export function SharedWorkspace({
     );
   };
 
+  const executeSave = async () => {
+    try {
+      const success = await onSave();
+      if (success !== false) {
+        lastSavedStateRef.current = JSON.stringify({
+          name: nameRef.current,
+          ...(mode === "template" ? { description } : {}),
+          content: contentRef.current,
+        });
+        await emit("item-saved");
+        showToast("Đã lưu thành công!", "success");
+      }
+    } catch (err: any) {
+      showToast("Lỗi khi lưu: " + (err?.message || String(err)), "error");
+    }
+  };
+
   useEffect(() => {
-    const closeMenu = () => setContextMenu(null);
+    const closeMenu = () => {
+      setContextMenu(null);
+      setShowFileMenu(false);
+    };
     window.addEventListener("pointerdown", closeMenu);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -290,7 +326,7 @@ export function SharedWorkspace({
       const key = e.key.toLowerCase();
       if (isCtrl && key === "s") {
         e.preventDefault();
-        onSave();
+        executeSave();
         return;
       }
       const activeTag = document.activeElement?.tagName.toLowerCase();
@@ -383,8 +419,9 @@ export function SharedWorkspace({
           else if (e.clientY > sRect.bottom - threshold)
             scrollContainerRef.current.scrollTop += speed;
         }
-        const curX = pxToMm(e.clientX - rect.left);
-        const curY = pxToMm(e.clientY - rect.top);
+        const currentZoom = zoomRef.current;
+        const curX = pxToMm((e.clientX - rect.left) / currentZoom);
+        const curY = pxToMm((e.clientY - rect.top) / currentZoom);
         let newX = Math.max(0, curX - dragInfo.offsetX);
         let newY = Math.max(0, curY - dragInfo.offsetY);
         if (snapEnabledRef.current && !isAlt) {
@@ -403,8 +440,9 @@ export function SharedWorkspace({
           ),
         }));
       } else if (resizeInfo) {
-        const deltaX = pxToMm(e.clientX - resizeInfo.startX);
-        const deltaY = pxToMm(e.clientY - resizeInfo.startY);
+        const currentZoom = zoomRef.current;
+        const deltaX = pxToMm((e.clientX - resizeInfo.startX) / currentZoom);
+        const deltaY = pxToMm((e.clientY - resizeInfo.startY) / currentZoom);
         let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
         let newX = initX,
           newY = initY,
@@ -509,7 +547,7 @@ export function SharedWorkspace({
             ? scrollContainerRef.current.scrollTop
             : 0;
           let targetYPx = Math.max(0, scrollYPx - 48) + 80;
-          let posY = pxToMm(targetYPx);
+          let posY = pxToMm(targetYPx / zoom);
           let posX = (pageWidth - 40) / 2;
 
           if (snapEnabled) {
@@ -581,7 +619,7 @@ export function SharedWorkspace({
       ? scrollContainerRef.current.scrollTop
       : 0;
     let targetYPx = Math.max(0, scrollYPx - 48) + 80;
-    let posY = pxToMm(targetYPx);
+    let posY = pxToMm(targetYPx / zoom);
     let posX = (pageWidth - initialW) / 2;
 
     if (snapEnabled) {
@@ -794,6 +832,11 @@ export function SharedWorkspace({
           >
             {isLandscape ? <Columns size={16} /> : <Rows size={16} />} Xoay
           </button>
+          <div style={{ display: "flex", alignItems: "center", backgroundColor: "#ffffff", border: "1px solid #e4e4e7", borderRadius: "6px", height: "31px", marginLeft: "8px", overflow: "hidden", flexShrink: 0 }}>
+            <button onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom > 0.5 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>-</button>
+            <span style={{ fontSize: "13px", minWidth: "44px", textAlign: "center", color: "#18181b", fontWeight: 500 }}>{Math.round(zoom * 100)}%</span>
+            <button onClick={() => setZoom(z => Math.min(3.0, z + 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom < 3.0 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>+</button>
+          </div>
           <input
             type="file"
             ref={fileInputRef}
@@ -820,69 +863,41 @@ export function SharedWorkspace({
           >
             <Sliders size={16} /> Thiết lập
           </button>
-          <button
-            style={{
-              backgroundColor: "#ffffff",
-              border: "1px solid #e4e4e7",
-              color: "#18181b",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "13px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}
-            onClick={handleExportPdf}
-          >
-            <FileDown size={16} /> Xuất PDF
-          </button>
-          <button
-            style={{
-              backgroundColor: "#18181b",
-              color: "white",
-              fontWeight: 500,
-              padding: "6px 16px",
-              borderRadius: "6px",
-              border: "none",
-              cursor: "pointer",
-              fontSize: "13px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}
-            onClick={async () => {
-              await onSave();
-              lastSavedStateRef.current = JSON.stringify({
-                name,
-                ...(mode === "template" ? { description } : {}),
-                content,
-              });
-              await emit("item-saved");
-              showToast("Đã lưu thành công!", "success");
-            }}
-          >
-            <Save size={16} /> Lưu
-          </button>
-          {mode === "template" && onSaveAsNew && (
+          <div style={{ position: "relative" }}>
             <button
-              style={{
-                backgroundColor: "#ffffff",
-                border: "1px solid #e4e4e7",
-                color: "#18181b",
-                padding: "6px 12px",
-                borderRadius: "6px",
-                cursor: "pointer",
-                fontSize: "13px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-              onClick={onSaveAsNew}
+              onClick={(e) => { e.stopPropagation(); setShowFileMenu(!showFileMenu); }}
+              style={{ display: "flex", alignItems: "center", padding: "6px 12px", fontSize: "14px", fontWeight: 500, color: "white", backgroundColor: "#2563eb", borderRadius: "6px", cursor: "pointer", border: "none" }}
             >
-              <Copy size={16} /> Save As
+              <Menu style={{ marginRight: "6px" }} size={16}/>
+              Tệp
             </button>
-          )}
+            {showFileMenu && (
+              <div 
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{ position: "absolute", top: "100%", right: 0, marginTop: "4px", width: "160px", backgroundColor: "white", border: "1px solid #e4e4e7", borderRadius: "6px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)", zIndex: 50, padding: "4px 0", display: "flex", flexDirection: "column" }}>
+                <button
+                  onClick={() => { executeSave(); setShowFileMenu(false); }}
+                  style={{ width: "100%", textAlign: "left", padding: "8px 16px", fontSize: "14px", color: "#374151", border: "none", backgroundColor: "transparent", cursor: "pointer" }}
+                >
+                  Lưu
+                </button>
+                <button
+                  onClick={() => { handleExportPdf(); setShowFileMenu(false); }}
+                  style={{ width: "100%", textAlign: "left", padding: "8px 16px", fontSize: "14px", color: "#374151", border: "none", backgroundColor: "transparent", cursor: "pointer" }}
+                >
+                  Xuất PDF
+                </button>
+                {mode === "template" && onSaveAsNew && (
+                  <button
+                    onClick={() => { onSaveAsNew(); setShowFileMenu(false); }}
+                    style={{ width: "100%", textAlign: "left", padding: "8px 16px", fontSize: "14px", color: "#374151", border: "none", backgroundColor: "transparent", cursor: "pointer" }}
+                  >
+                    Save As
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -1054,27 +1069,38 @@ export function SharedWorkspace({
             }}
           >
             <div
-              ref={canvasRef}
               style={{
-                width: `${mmToPx(content.page?.width_mm || 210)}px`,
-                height: `${mmToPx(content.page?.height_mm || 297)}px`,
-                backgroundColor: "#ffffff",
-                borderRadius: "2px",
+                width: `${mmToPx(content.page?.width_mm || 210) * zoom}px`,
+                height: `${mmToPx(content.page?.height_mm || 297) * zoom}px`,
                 position: "relative",
-                border: "1px solid #e4e4e7",
-                boxShadow:
-                  "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-                backgroundImage: showGrid
-                  ? "radial-gradient(#e4e4e7 1px, transparent 1px)"
-                  : "none",
-                backgroundSize: `${mmToPx(5)}px ${mmToPx(5)}px`,
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedElementId(null);
               }}
             >
-              {content.elements.map((el, index) => {
+              <div
+                ref={canvasRef}
+                style={{
+                  width: `${mmToPx(content.page?.width_mm || 210)}px`,
+                  height: `${mmToPx(content.page?.height_mm || 297)}px`,
+                  backgroundColor: "#ffffff",
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "top left",
+                  borderRadius: "2px",
+                  border: "1px solid #e4e4e7",
+                  boxShadow:
+                    "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
+                  backgroundImage: showGrid
+                    ? "radial-gradient(#e4e4e7 1px, transparent 1px)"
+                    : "none",
+                  backgroundSize: `${mmToPx(5)}px ${mmToPx(5)}px`,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedElementId(null);
+                }}
+              >
+                {content.elements.map((el, index) => {
                 const props = (el.properties as any) || {};
                 const isEditing = editingElementId === el.id;
                 const isSelected = selectedElementId === el.id;
@@ -1138,9 +1164,9 @@ export function SharedWorkspace({
                         setDragInfo({
                           elementId: el.id,
                           offsetX:
-                            pxToMm(e.clientX - rect.left) - el.position_x_mm,
+                            pxToMm((e.clientX - rect.left) / zoom) - el.position_x_mm,
                           offsetY:
-                            pxToMm(e.clientY - rect.top) - el.position_y_mm,
+                            pxToMm((e.clientY - rect.top) / zoom) - el.position_y_mm,
                         });
                     }}
                   >
@@ -1304,6 +1330,7 @@ export function SharedWorkspace({
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         </div>

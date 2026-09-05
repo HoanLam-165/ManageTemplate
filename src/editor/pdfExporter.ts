@@ -1,36 +1,20 @@
 import { jsPDF } from "jspdf";
 import { DocumentContent } from "../App";
 import { invoke } from "@tauri-apps/api/core";
+import { ROBOTO_REGULAR_BASE64, ROBOTO_BOLD_BASE64 } from "./fontsBase64";
 
 async function loadUnicodeFont(doc: jsPDF) {
   try {
-    const [regularBuffer, boldBuffer] = await Promise.all([
-      fetch("/fonts/Roboto-Regular.ttf").then((res) => {
-        if (!res.ok) throw new Error("Không thể tải font Regular nội bộ");
-        return res.arrayBuffer();
-      }),
-      fetch("/fonts/Roboto-Bold.ttf").then((res) => {
-        if (!res.ok) throw new Error("Không thể tải font Bold nội bộ");
-        return res.arrayBuffer();
-      }),
-    ]);
+    // Nạp font Regular
+    doc.addFileToVFS('Roboto-Regular.ttf', ROBOTO_REGULAR_BASE64);
+    doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
 
-    const toBase64 = (buf: ArrayBuffer) => {
-      let binary = "";
-      const bytes = new Uint8Array(buf);
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return window.btoa(binary);
-    };
+    // Nạp font Bold
+    doc.addFileToVFS('Roboto-Bold.ttf', ROBOTO_BOLD_BASE64);
+    doc.addFont('Roboto-Bold.ttf', 'Roboto', 'bold');
 
-    doc.addFileToVFS("Roboto-Regular.ttf", toBase64(regularBuffer));
-    doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
-
-    doc.addFileToVFS("Roboto-Bold.ttf", toBase64(boldBuffer));
-    doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
-
-    doc.setFont("Roboto", "normal");
+    // Đặt font mặc định
+    doc.setFont('Roboto');
   } catch (err) {
     console.warn("--> Dùng font helvetica dự phòng:", err);
     doc.setFont("helvetica", "normal");
