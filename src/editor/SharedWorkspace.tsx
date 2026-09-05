@@ -67,7 +67,7 @@ function deepEqual(obj1: any, obj2: any): boolean {
   return true;
 }
 
-function ImageElement({ assetId }: { assetId: number }) {
+function ImageElement({ assetId }: { assetId: number; width?: number; height?: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
     if (assetId) {
@@ -76,6 +76,7 @@ function ImageElement({ assetId }: { assetId: number }) {
         .catch(console.error);
     }
   }, [assetId]);
+
   return src ? (
     <img
       src={src}
@@ -86,6 +87,7 @@ function ImageElement({ assetId }: { assetId: number }) {
         objectFit: "contain",
         pointerEvents: "none",
         userSelect: "none",
+        display: "block",
       }}
     />
   ) : (
@@ -133,6 +135,118 @@ export function SharedWorkspace({
   const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
   const [zoom, setZoom] = useState<number>(1);
   const zoomRef = useRef(zoom);
+  const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const panStartRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number }>({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  // Danh sách các mốc zoom chuẩn
+  const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+
+  const handleZoomChange = (newZoom: number, focalPoint?: { x: number; y: number }) => {
+    const clampedZoom = Math.min(3.0, Math.max(0.25, Math.round(newZoom * 100) / 100));
+    const container = scrollContainerRef.current;
+
+    if (container && focalPoint) {
+      const prevZoom = zoomRef.current;
+      const rect = container.getBoundingClientRect();
+      const mouseX = focalPoint.x - rect.left;
+      const mouseY = focalPoint.y - rect.top;
+
+      const newScrollLeft = (container.scrollLeft + mouseX) * (clampedZoom / prevZoom) - mouseX;
+      const newScrollTop = (container.scrollTop + mouseY) * (clampedZoom / prevZoom) - mouseY;
+
+      setZoom(clampedZoom);
+      zoomRef.current = clampedZoom;
+
+      requestAnimationFrame(() => {
+        container.scrollLeft = newScrollLeft;
+        container.scrollTop = newScrollTop;
+      });
+    } else {
+      setZoom(clampedZoom);
+      zoomRef.current = clampedZoom;
+    }
+  };
+
+  const handleFitToScreen = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const paddingX = 64;
+    const paddingY = 96;
+    const availW = container.clientWidth - paddingX;
+    const availH = container.clientHeight - paddingY;
+    const pageW = mmToPx(content.page?.width_mm || 210);
+    const pageH = mmToPx(content.page?.height_mm || 297);
+
+    const fitScale = Math.min(availW / pageW, availH / pageH);
+    const targetZoom = Math.min(2.0, Math.max(0.25, Math.round(fitScale * 100) / 100));
+    setZoom(targetZoom);
+    zoomRef.current = targetZoom;
+
+    requestAnimationFrame(() => {
+      container.scrollLeft = (container.scrollWidth - container.clientWidth) / 2;
+      container.scrollTop = 0;
+    });
+  };
+
+  // Xử lý Ctrl + Lăn chuột để zoom vào vị trí con trỏ chuột
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const zoomFactor = e.deltaY < 0 ? 1.12 : 0.88;
+        const targetZoom = zoomRef.current * zoomFactor;
+        handleZoomChange(targetZoom, { x: e.clientX, y: e.clientY });
+      }
+    };
+
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
+  // Xử lý phím tắt Zoom (Ctrl +, Ctrl -, Ctrl 0, Shift 1) và giữ phím Space
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (editingIdRef.current !== null || activeTag === "input" || activeTag === "textarea") return;
+
+      const isCtrl = e.ctrlKey || e.metaKey;
+      if (isCtrl && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        handleZoomChange(zoomRef.current + 0.15);
+      } else if (isCtrl && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        handleZoomChange(zoomRef.current - 0.15);
+      } else if (isCtrl && e.key === "0") {
+        e.preventDefault();
+        handleZoomChange(1.0);
+      } else if (e.shiftKey && e.key === "!") { // Shift + 1
+        e.preventDefault();
+        handleFitToScreen();
+      } else if (e.code === "Space" && !e.repeat && !isSpacePressed) {
+        setIsSpacePressed(true);
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        setIsSpacePressed(false);
+        setIsPanning(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [isSpacePressed]);
 
   const [dragInfo, setDragInfo] = useState<{
     elementId: string;
@@ -441,52 +555,75 @@ export function SharedWorkspace({
         }));
       } else if (resizeInfo) {
         const currentZoom = zoomRef.current;
-        const deltaX = pxToMm((e.clientX - resizeInfo.startX) / currentZoom);
-        const deltaY = pxToMm((e.clientY - resizeInfo.startY) / currentZoom);
-        let { initX, initY, initW, initH, handle, elementId } = resizeInfo;
-        let newX = initX,
-          newY = initY,
-          newW = initW,
-          newH = initH;
-        const minW = 5,
-          minH = 5;
-        if (handle.includes("e")) newW = Math.max(minW, initW + deltaX);
-        if (handle.includes("s")) newH = Math.max(minH, initH + deltaY);
-        if (handle.includes("w")) {
-          const possibleW = initW - deltaX;
-          if (possibleW >= minW) {
-            newW = possibleW;
-            newX = initX + deltaX;
+        const totalDeltaX = pxToMm((e.clientX - resizeInfo.startX) / currentZoom);
+        const totalDeltaY = pxToMm((e.clientY - resizeInfo.startY) / currentZoom);
+        const { handle, elementId, initX, initY, initW, initH } = resizeInfo;
+        const minW = 5;
+        const minH = 5;
+
+        const currentEl = contentRef.current.elements.find(el => el.id === elementId);
+        const isImage = currentEl?.element_type === "Image";
+        const lockAspect = isImage || e.shiftKey;
+        const aspectRatio = initW / (initH || 1);
+
+        let newX = initX;
+        let newY = initY;
+        let newW = initW;
+        let newH = initH;
+
+        if (lockAspect && ["nw", "ne", "se", "sw"].includes(handle)) {
+          // Khóa tỷ lệ khi kéo các điểm góc
+          let delta = Math.abs(totalDeltaX) > Math.abs(totalDeltaY) ? totalDeltaX : totalDeltaY;
+          if (handle === "se") {
+            newW = Math.max(minW, initW + delta);
+            newH = newW / aspectRatio;
+          } else if (handle === "sw") {
+            newW = Math.max(minW, initW - delta);
+            newH = newW / aspectRatio;
+            newX = initX + (initW - newW);
+          } else if (handle === "ne") {
+            newW = Math.max(minW, initW + delta);
+            newH = newW / aspectRatio;
+            newY = initY + (initH - newH);
+          } else if (handle === "nw") {
+            newW = Math.max(minW, initW - delta);
+            newH = newW / aspectRatio;
+            newX = initX + (initW - newW);
+            newY = initY + (initH - newH);
           }
-        }
-        if (handle.includes("n")) {
-          const possibleH = initH - deltaY;
-          if (possibleH >= minH) {
-            newH = possibleH;
-            newY = initY + deltaY;
-          }
-        }
-        if (snapEnabledRef.current && !isAlt) {
-          newX = snapVal(newX, 5);
-          newY = snapVal(newY, 5);
-          newW = Math.max(minW, snapVal(newW, 5));
-          newH = Math.max(minH, snapVal(minH, 5));
         } else {
-          newX = Math.round(newX * 10) / 10;
-          newY = Math.round(newY * 10) / 10;
-          newW = Math.round(newW * 10) / 10;
-          newH = Math.round(newH * 10) / 10;
+          // Kéo tự do theo các cạnh
+          if (handle.includes("e")) {
+            const rawW = initW + totalDeltaX;
+            newW = Math.max(minW, snapEnabledRef.current && !isAlt ? snapVal(initX + rawW, 5) - initX : rawW);
+          } else if (handle.includes("w")) {
+            const rightEdge = initX + initW;
+            const rawX = initX + totalDeltaX;
+            newX = Math.min(rightEdge - minW, snapEnabledRef.current && !isAlt ? snapVal(rawX, 5) : rawX);
+            newW = rightEdge - newX;
+          }
+
+          if (handle.includes("s")) {
+            const rawH = initH + totalDeltaY;
+            newH = Math.max(minH, snapEnabledRef.current && !isAlt ? snapVal(initY + rawH, 5) - initY : rawH);
+          } else if (handle.includes("n")) {
+            const bottomEdge = initY + initH;
+            const rawY = initY + totalDeltaY;
+            newY = Math.min(bottomEdge - minH, snapEnabledRef.current && !isAlt ? snapVal(rawY, 5) : rawY);
+            newH = bottomEdge - newY;
+          }
         }
+
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
               ? {
                   ...item,
-                  position_x_mm: newX,
-                  position_y_mm: newY,
-                  width_mm: newW,
-                  height_mm: newH,
+                  position_x_mm: Math.round(newX * 10) / 10,
+                  position_y_mm: Math.round(newY * 10) / 10,
+                  width_mm: Math.round(newW * 10) / 10,
+                  height_mm: Math.round(newH * 10) / 10,
                 }
               : item,
           ),
@@ -833,9 +970,65 @@ export function SharedWorkspace({
             {isLandscape ? <Columns size={16} /> : <Rows size={16} />} Xoay
           </button>
           <div style={{ display: "flex", alignItems: "center", backgroundColor: "#ffffff", border: "1px solid #e4e4e7", borderRadius: "6px", height: "31px", marginLeft: "8px", overflow: "hidden", flexShrink: 0 }}>
-            <button onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom > 0.5 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>-</button>
-            <span style={{ fontSize: "13px", minWidth: "44px", textAlign: "center", color: "#18181b", fontWeight: 500 }}>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom(z => Math.min(3.0, z + 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom < 3.0 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>+</button>
+            <button 
+              onClick={() => handleZoomChange(zoom - 0.1)} 
+              title="Thu nhỏ (Ctrl -)"
+              style={{ padding: "0 8px", border: "none", background: "none", cursor: zoom > 0.25 ? "pointer" : "not-allowed", color: "#18181b", height: "100%", fontSize: "14px", fontWeight: 600 }}
+            >
+              -
+            </button>
+            
+            <select
+              value={zoom}
+              onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
+              style={{
+                fontSize: "12px",
+                fontWeight: 500,
+                color: "#18181b",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                padding: "0 4px",
+                outline: "none",
+                textAlign: "center"
+              }}
+            >
+              {ZOOM_PRESETS.map((p) => (
+                <option key={p} value={p}>
+                  {Math.round(p * 100)}%
+                </option>
+              ))}
+              {!ZOOM_PRESETS.includes(zoom) && (
+                <option value={zoom}>{Math.round(zoom * 100)}%</option>
+              )}
+            </select>
+
+            <button 
+              onClick={() => handleZoomChange(zoom + 0.1)} 
+              title="Phóng to (Ctrl +)"
+              style={{ padding: "0 8px", border: "none", background: "none", cursor: zoom < 3.0 ? "pointer" : "not-allowed", color: "#18181b", height: "100%", fontSize: "14px", fontWeight: 600 }}
+            >
+              +
+            </button>
+
+            <div style={{ width: "1px", height: "16px", backgroundColor: "#e4e4e7" }} />
+
+            <button
+              onClick={handleFitToScreen}
+              title="Vừa màn hình (Shift + 1)"
+              style={{
+                padding: "0 8px",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "#52525b",
+                height: "100%"
+              }}
+            >
+              Fit
+            </button>
           </div>
           <input
             type="file"
@@ -1055,8 +1248,33 @@ export function SharedWorkspace({
             minWidth: 0,
             overflow: "auto",
             backgroundColor: "#f4f4f5",
+            cursor: isPanning ? "grabbing" : isSpacePressed ? "grab" : "default",
           }}
-          onClick={() => setSelectedElementId(null)}
+          onPointerDown={(e) => {
+            if (isSpacePressed || e.button === 1) { // Phím space hoặc chuột giữa
+              e.preventDefault();
+              setIsPanning(true);
+              panStartRef.current = {
+                x: e.clientX,
+                y: e.clientY,
+                scrollLeft: scrollContainerRef.current?.scrollLeft || 0,
+                scrollTop: scrollContainerRef.current?.scrollTop || 0,
+              };
+            } else {
+              setSelectedElementId(null);
+            }
+          }}
+          onPointerMove={(e) => {
+            if (isPanning && scrollContainerRef.current) {
+              const dx = e.clientX - panStartRef.current.x;
+              const dy = e.clientY - panStartRef.current.y;
+              scrollContainerRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+              scrollContainerRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+            }
+          }}
+          onPointerUp={() => {
+            if (isPanning) setIsPanning(false);
+          }}
         >
           <div
             style={{
@@ -1128,20 +1346,20 @@ export function SharedWorkspace({
                         elementId: el.id,
                       });
                     }}
-                    style={{
-                      position: "absolute",
-                      zIndex: index + 1,
-                      left: `${mmToPx(el.position_x_mm)}px`,
-                      top: `${mmToPx(el.position_y_mm)}px`,
-                      width: `${mmToPx(el.width_mm)}px`,
-                      height: `${mmToPx(el.height_mm)}px`,
-                      border: isSelected
-                        ? "1.5px solid #18181b"
-                        : "1px solid transparent",
-                      cursor: isEditing ? "text" : "move",
-                      touchAction: "none",
-                      userSelect: "none",
-                    }}
+                  style={{
+                    position: "absolute",
+                    zIndex: index + 1,
+                    left: `${mmToPx(el.position_x_mm)}px`,
+                    top: `${mmToPx(el.position_y_mm)}px`,
+                    width: `${mmToPx(el.width_mm)}px`,
+                    height: `${mmToPx(el.height_mm)}px`,
+                    border: isSelected
+                      ? "1.5px solid #18181b"
+                      : "1px solid transparent",
+                    cursor: isEditing ? "text" : "move",
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
                     onMouseEnter={(e) => {
                       if (!isSelected)
                         (e.currentTarget as HTMLDivElement).style.border =
@@ -1233,7 +1451,11 @@ export function SharedWorkspace({
                       </div>
                     )}
                     {el.element_type === "Image" && (
-                      <ImageElement assetId={props.asset_id} />
+                      <ImageElement
+                        assetId={props.asset_id}
+                        width={el.width_mm}
+                        height={el.height_mm}
+                      />
                     )}
 
                     {isSelected &&
@@ -1792,6 +2014,8 @@ export function SharedWorkspace({
                     >
                       <ImageElement
                         assetId={selectedElement.properties.asset_id}
+                        width={selectedElement.width_mm}
+                        height={selectedElement.height_mm}
                       />
                     </div>
                     <button
