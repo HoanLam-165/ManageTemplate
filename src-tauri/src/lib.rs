@@ -17,7 +17,7 @@ pub struct AuthState(pub Mutex<Option<User>>);
 
 #[tauri::command]
 fn register(db: tauri::State<DbState>, username: &str, password: &str) -> Result<i64, error::AppError> {
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     let user_id = repo::UserRepo::create(&conn, username, password)?;
     repo::TemplateRepo::seed_for_user(&conn, user_id)?;
     Ok(user_id)
@@ -30,7 +30,7 @@ fn login(
     username: &str, 
     password: &str
 ) -> Result<User, error::AppError> {
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     let user = repo::UserRepo::find_by_username(&conn, username)?
         .ok_or(error::AppError::AuthError("User not found".into()))?;
 
@@ -39,41 +39,38 @@ fn login(
         .then_some(())
         .ok_or(error::AppError::AuthError("Invalid password".into()))?;
 
-    let mut auth_state = auth.0.lock().unwrap();
+    let mut auth_state = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?;
     *auth_state = Some(user.clone());
 
-    // Ensure seeded templates are populated/repaired
     repo::TemplateRepo::seed_for_user(&conn, user.id)?;
-
     Ok(user)
 }
 
 #[tauri::command]
 fn get_current_user(auth: tauri::State<AuthState>) -> Option<User> {
-    let auth_state = auth.0.lock().unwrap();
-    auth_state.clone()
+    auth.0.lock().ok().and_then(|state| state.clone())
 }
 
 #[tauri::command]
 fn logout(auth: tauri::State<AuthState>) {
-    let mut auth_state = auth.0.lock().unwrap();
-    *auth_state = None;
+    if let Ok(mut auth_state) = auth.0.lock() {
+        *auth_state = None;
+    }
 }
 
 #[tauri::command]
 fn get_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::TemplateRepo::get_by_user(&conn, user.id)
 }
 
 #[tauri::command]
 fn create_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, description: Option<String>, metadata: &str) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
-
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::TemplateRepo::create(&conn, user.id, name, description.as_deref(), metadata)
 }
 
@@ -86,11 +83,10 @@ fn update_template(
     description: Option<&str>, 
     metadata: &str
 ) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
 
-    // Verify ownership
     let template: models::Template = conn.query_row(
         "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE id = ?1",
         [id],
@@ -111,31 +107,30 @@ fn update_template(
     if template.user_id != user.id {
         return Err(error::AppError::AuthError("Access denied".into()));
     }
-
     repo::TemplateRepo::update(&conn, id, name, description, metadata)
 }
 
 #[tauri::command]
 fn search_templates(db: tauri::State<DbState>, auth: tauri::State<AuthState>, query: &str) -> Result<Vec<models::Template>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::TemplateRepo::search_by_user(&conn, user.id, query)
 }
 
 #[tauri::command]
 fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Result<Vec<models::Document>, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::DocumentRepo::get_by_user(&conn, user.id)
 }
 
 #[tauri::command]
 fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
 }
 
@@ -147,11 +142,10 @@ fn update_document(
     name: Option<&str>, 
     metadata: &str
 ) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
 
-    // Verify ownership
     let doc_user_id: i64 = conn.query_row(
         "SELECT user_id FROM documents WHERE id = ?1",
         [id],
@@ -178,17 +172,17 @@ fn update_document(
 
 #[tauri::command]
 fn delete_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::TemplateRepo::delete(&conn, id, user.id)
 }
 
 #[tauri::command]
 fn delete_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<(), error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     repo::DocumentRepo::delete(&conn, id, user.id)
 }
 
@@ -200,7 +194,7 @@ fn upload_asset_base64(
     data_url: String,
     file_name: String,
 ) -> Result<i64, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
 
     let base64_str = if let Some(idx) = data_url.find(',') {
@@ -214,11 +208,23 @@ fn upload_asset_base64(
         .decode(base64_str)
         .map_err(|e| error::AppError::ValidationError(format!("Invalid base64 payload: {}", e)))?;
 
-    let saved_path = assets::save_asset(&app_handle, &file_name, &bytes)
+    // FIX: Không tin tưởng tên file từ Frontend, tự sinh tên an toàn ở Backend.
+    let ext = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+        
+    let safe_ext = ext.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>();
+    let safe_ext = if safe_ext.is_empty() { "png".to_string() } else { safe_ext };
+    
+    let timestamp = chrono::Utc::now().timestamp_micros();
+    let safe_file_name = format!("{}.{}", timestamp, safe_ext);
+
+    let saved_path = assets::save_asset(&app_handle, &safe_file_name, &bytes)
         .map_err(|e| error::AppError::IoError(e.to_string()))?;
 
-    let path_str = saved_path.to_str().unwrap_or(&file_name);
-    let conn = db.0.lock().unwrap();
+    let path_str = saved_path.to_str().unwrap_or(&safe_file_name);
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     let asset_id = repo::AssetRepo::create(&conn, user.id, "Image", path_str)?;
 
     Ok(asset_id)
@@ -230,9 +236,9 @@ fn get_asset_base64(
     auth: tauri::State<AuthState>,
     id: i64,
 ) -> Result<String, error::AppError> {
-    let user = auth.0.lock().unwrap().clone()
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
-    let conn = db.0.lock().unwrap();
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
     
     let path: String = conn.query_row(
         "SELECT path FROM assets WHERE id = ?1 AND user_id = ?2",

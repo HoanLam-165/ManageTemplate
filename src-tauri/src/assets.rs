@@ -14,7 +14,14 @@ pub fn get_assets_dir(app_handle: &AppHandle) -> PathBuf {
 
 pub fn save_asset(app_handle: &AppHandle, filename: &str, data: &[u8]) -> Result<PathBuf, std::io::Error> {
     let assets_dir = get_assets_dir(app_handle);
-    let file_path = assets_dir.join(filename);
+    
+    // Xử lý Path Traversal: Chỉ lấy tên file cuối cùng, bỏ qua đường dẫn
+    let safe_filename = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed_asset");
+        
+    let file_path = assets_dir.join(safe_filename);
     fs::write(&file_path, data)?;
     Ok(file_path)
 }
