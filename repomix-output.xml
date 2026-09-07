@@ -40,6 +40,43 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+AI-pipeline/
+  augraphy_cache/
+    image_0.png
+    image_1.png
+    image_10.png
+    image_11.png
+    image_12.png
+    image_13.png
+    image_14.png
+    image_15.png
+    image_16.png
+    image_17.png
+    image_18.png
+    image_19.png
+    image_2.png
+    image_20.png
+    image_21.png
+    image_22.png
+    image_23.png
+    image_24.png
+    image_25.png
+    image_26.png
+    image_27.png
+    image_28.png
+    image_29.png
+    image_3.png
+    image_4.png
+    image_5.png
+    image_6.png
+    image_7.png
+    image_8.png
+    image_9.png
+  document_scanner.py
+  generate_dynamic_data.py
+  main.py
+  Roboto-Bold.ttf
+  Roboto-Regular.ttf
 docs/
   decisions/
     02-docx-spike-result.md
@@ -48,6 +85,10 @@ docs/
     KẾ HOẠCH PHÁT TRIỂN SẢN PHẨM — TEMPLATE WORKSPACE v2.md
   product/
     00-bootstrap.md
+document-analyzer/
+  main.py
+  processor.py
+  requirements.txt
 public/
   fonts/
     Roboto-Bold.ttf
@@ -64,6 +105,8 @@ src/
     fontsBase64.ts
     pdfExporter.ts
     SharedWorkspace.tsx
+  hooks/
+    useDocumentAnalyzer.ts
   App.css
   App.tsx
   AuthView.tsx
@@ -144,6 +187,382 @@ vite.config.ts
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="AI-pipeline/document_scanner.py">
+import cv2
+import numpy as np
+import os
+
+# Cấu hình kích thước đích (Chuẩn A4)
+TARGET_WIDTH, TARGET_HEIGHT = 840, 1188
+
+def order_points(pts):
+    # Sắp xếp 4 đỉnh theo thứ tự: Trái-Trên, Phải-Trên, Phải-Dưới, Trái-Dưới
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+def dewarp_image(image_path, save_path):
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Lỗi: Không đọc được ảnh {image_path}")
+        return
+
+    # Tiền xử lý: Gray, Blur, Canny Edge
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blur, 75, 200)
+
+    # Tìm các đường viền (contours)
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    document_contour = None
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4: # Tìm thấy đa giác 4 đỉnh lớn nhất (Tờ giấy)
+            document_contour = approx
+            break
+
+    if document_contour is not None:
+        # Lấy 4 góc của tờ giấy
+        pts = document_contour.reshape(4, 2)
+        rect = order_points(pts)
+
+        # Định nghĩa 4 góc của khung A4 phẳng
+        dst = np.array([
+            [0, 0],
+            [TARGET_WIDTH - 1, 0],
+            [TARGET_WIDTH - 1, TARGET_HEIGHT - 1],
+            [0, TARGET_HEIGHT - 1]
+        ], dtype="float32")
+
+        # Ma trận biến đổi phối cảnh và nắn phẳng
+        M = cv2.getPerspectiveTransform(rect, dst)
+        warped = cv2.warpPerspective(img, M, (TARGET_WIDTH, TARGET_HEIGHT))
+
+        # Lưu ảnh phẳng
+        cv2.imwrite(save_path, warped)
+        print(f"Đã nắn phẳng và lưu: {save_path}")
+    else:
+        print(f"Thất bại: Không tìm thấy viền giấy A4 rõ ràng trong {image_path}")
+
+# HƯỚNG DẪN SỬ DỤNG:
+# Tạo thư mục 'raw_photos' chứa ảnh bạn chụp điện thoại
+# Tạo thư mục 'flat_photos' để nhận ảnh xuất ra (dùng thư mục này cho LabelImg)
+os.makedirs("raw_photos", exist_ok=True)
+os.makedirs("flat_photos", exist_ok=True)
+
+for file in os.listdir("raw_photos"):
+    if file.endswith((".jpg", ".png", ".jpeg")):
+        in_path = os.path.join("raw_photos", file)
+        out_path = os.path.join("flat_photos", f"flat_{file}")
+        dewarp_image(in_path, out_path)
+</file>
+
+<file path="AI-pipeline/generate_dynamic_data.py">
+import cv2
+import numpy as np
+import os
+import random
+from PIL import Image, ImageDraw, ImageFont
+from augraphy import AugraphyPipeline, InkBleed, BleedThrough, ShadowCast, NoiseTexturize
+
+# --- VÁ LỖI PYTHON 3.12 CHO AUGRAPHY ---
+_original_randint = random.randint
+def _patched_randint(a, b): return _original_randint(int(a), int(b))
+random.randint = _patched_randint
+# ---------------------------------------
+
+# 1. CẤU HÌNH & TỪ ĐIỂN
+IMG_WIDTH, IMG_HEIGHT = 840, 1188
+NUM_IMAGES = 10  # Đã tăng lên 1000 ảnh
+TRAIN_RATIO = 0.9  # 90% cho Train, 10% cho Val
+
+CLASSES = {"Label_Text": 0, "Value_Text": 1, "Checkbox": 2}
+LABELS = ["Họ và tên / Full Name:", "Địa chỉ / Address:", "Số ĐT / Phone:", "Phòng ban / Dept:", 
+          "Lý do / Reason:", "Mã số / ID:", "Email:", "Tình trạng / Status:", "Chữ ký / Sign:"]
+VALUES = ["Nguyễn Văn A", "John Doe", "Hà Nội, Việt Nam", "New York, USA", "0912345678", 
+          "IT Support", "Server down", "Nghỉ phép", "Approved", "test@topcv.vn", "12/12/2026"]
+TITLES = ["BUG REPORT FORM", "ĐƠN XIN NGHỈ PHÉP", "BIÊN BẢN HỌP / MEETING NOTES", "TEST CASE EXECUTION"]
+
+# Khởi tạo thư mục chuẩn YOLOv8
+DIRS = [
+    "dataset/images/train", "dataset/images/val",
+    "dataset/labels/train", "dataset/labels/val"
+]
+for d in DIRS:
+    os.makedirs(d, exist_ok=True)
+
+# Load Font (Phải có sẵn trong thư mục)
+try:
+    font_title = ImageFont.truetype("Roboto-Bold.ttf", 36)
+    font_label = ImageFont.truetype("Roboto-Bold.ttf", 24)
+    font_value = ImageFont.truetype("Roboto-Regular.ttf", 24)
+except IOError:
+    print("Lỗi: Không tìm thấy file font Roboto. Hãy đảm bảo copy font vào thư mục.")
+    exit()
+
+# Pipeline Augraphy (Bỏ PaperFactory để tối ưu tốc độ và tương thích)
+pipeline = AugraphyPipeline(
+    ink_phase=[InkBleed(intensity_range=(0.1, 0.4)), BleedThrough(intensity_range=(0.1, 0.2))],
+    paper_phase=[],
+    post_phase=[ShadowCast(), NoiseTexturize()]
+)
+
+def convert_to_yolo(box, img_w, img_h):
+    x_min, y_min, x_max, y_max = box
+    x_center = ((x_min + x_max) / 2) / img_w
+    y_center = ((y_min + y_max) / 2) / img_h
+    width = (x_max - x_min) / img_w
+    height = (y_max - y_min) / img_h
+    return f"{x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
+
+# 2. ENGINE SINH DỮ LIỆU ĐỘNG
+print(f"Bắt đầu sinh {NUM_IMAGES} ảnh...")
+
+for i in range(NUM_IMAGES):
+    img_pil = Image.new("RGB", (IMG_WIDTH, IMG_HEIGHT), (255, 255, 255))
+    draw = ImageDraw.Draw(img_pil)
+    yolo_labels = []
+
+    y_cursor = 80
+    
+    # [NÂNG CẤP 1]: Giới hạn số lượng hàng ngẫu nhiên (Từ rất loãng đến đặc kín)
+    max_rows = random.randint(2, 15) 
+    current_row = 0
+
+    # Tiêu đề
+    title_text = random.choice(TITLES)
+    x_title = random.randint(50, 200)
+    title_box = draw.textbbox((x_title, y_cursor), title_text, font=font_title)
+    draw.text((x_title, y_cursor), title_text, font=font_title, fill=(0,0,0))
+    yolo_labels.append(f"{CLASSES['Label_Text']} {convert_to_yolo(title_box, IMG_WIDTH, IMG_HEIGHT)}")
+    y_cursor += random.randint(80, 120)
+
+    # Sinh nội dung
+    while y_cursor < IMG_HEIGHT - 150 and current_row < max_rows:
+        # [NÂNG CẤP 2]: Bẫy khoảng trắng (15% tỷ lệ nhảy một đoạn trống rất lớn)
+        if random.random() > 0.85:
+            y_cursor += random.randint(150, 350)
+            if y_cursor >= IMG_HEIGHT - 150: 
+                break
+
+        row_type = random.choice(["text_row", "text_row", "checkbox_row"])
+        x_cursor = random.randint(40, 80)
+
+        if row_type == "text_row":
+            lbl_text = random.choice(LABELS)
+            lbl_box = draw.textbbox((x_cursor, y_cursor), lbl_text, font=font_label)
+            draw.text((x_cursor, y_cursor), lbl_text, font=font_label, fill=(0,0,0))
+            yolo_labels.append(f"{CLASSES['Label_Text']} {convert_to_yolo(lbl_box, IMG_WIDTH, IMG_HEIGHT)}")
+            
+            x_cursor += (lbl_box[2] - lbl_box[0]) + random.randint(10, 30)
+
+            if random.random() > 0.2: 
+                val_text = random.choice(VALUES)
+                val_box = draw.textbbox((x_cursor, y_cursor), val_text, font=font_value)
+                draw.text((x_cursor, y_cursor), val_text, font=font_value, fill=(0,0,200)) # Chữ điền màu xanh
+                yolo_labels.append(f"{CLASSES['Value_Text']} {convert_to_yolo(val_box, IMG_WIDTH, IMG_HEIGHT)}")
+
+        elif row_type == "checkbox_row":
+            num_cb = random.randint(1, 3)
+            for _ in range(num_cb):
+                if x_cursor > IMG_WIDTH - 150: break # Tránh tràn lề phải
+                
+                cb_size = 24
+                cb_box = (x_cursor, y_cursor, x_cursor + cb_size, y_cursor + cb_size)
+                draw.rectangle(cb_box, outline=(0,0,0), width=2)
+                
+                if random.random() > 0.5:
+                    draw.line((x_cursor, y_cursor, x_cursor+cb_size, y_cursor+cb_size), fill=(0,0,0), width=2)
+                    draw.line((x_cursor+cb_size, y_cursor, x_cursor, y_cursor+cb_size), fill=(0,0,0), width=2)
+                
+                yolo_labels.append(f"{CLASSES['Checkbox']} {convert_to_yolo(cb_box, IMG_WIDTH, IMG_HEIGHT)}")
+                x_cursor += cb_size + 10
+
+                lbl_text = random.choice(["Yes", "No", "N/A", "Nam", "Nữ", "Khác"])
+                lbl_box = draw.textbbox((x_cursor, y_cursor), lbl_text, font=font_value)
+                draw.text((x_cursor, y_cursor), lbl_text, font=font_value, fill=(0,0,0))
+                yolo_labels.append(f"{CLASSES['Label_Text']} {convert_to_yolo(lbl_box, IMG_WIDTH, IMG_HEIGHT)}")
+                
+                x_cursor += (lbl_box[2] - lbl_box[0]) + random.randint(30, 60)
+
+        y_cursor += random.randint(50, 80)
+        current_row += 1
+
+    # 3. LÀM BẨN VÀ LƯU FILE THEO CHUẨN YOLO
+    img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    degraded_img = pipeline.augment(img_cv)["output"]
+    
+    # [NÂNG CẤP 3]: Chia Train/Val tự động
+    subset = "train" if random.random() < TRAIN_RATIO else "val"
+    base_filename = f"dynamic_form_{i:04d}"
+    
+    img_path = os.path.join(f"dataset/images/{subset}", f"{base_filename}.jpg")
+    label_path = os.path.join(f"dataset/labels/{subset}", f"{base_filename}.txt")
+
+    cv2.imwrite(img_path, degraded_img)
+    with open(label_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(yolo_labels))
+
+    # In tiến trình
+    if (i + 1) % 100 == 0:
+        print(f" Đã xử lý {i + 1}/{NUM_IMAGES} ảnh...")
+
+print("\nHOÀN TẤT! Dữ liệu đã được chia sẵn trong thư mục dataset/images và dataset/labels.")
+</file>
+
+<file path="AI-pipeline/main.py">
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+from paddleocr import PaddleOCR
+import math
+
+app = FastAPI(title="Template Workspace CV API")
+
+# Khởi tạo PaddleOCR (Tự động tải pre-trained model tiếng Việt lần đầu chạy)
+ocr_engine = PaddleOCR(use_angle_cls=True, lang='vi')
+
+# Kích thước chuẩn Pixel (Tỷ lệ A4) và kích thước thực (mm)
+TARGET_WIDTH_PX, TARGET_HEIGHT_PX = 840, 1188
+A4_WIDTH_MM, A4_HEIGHT_MM = 210.0, 297.0
+
+# Tỷ lệ quy đổi Pixel -> mm
+PX_TO_MM_X = A4_WIDTH_MM / TARGET_WIDTH_PX
+PX_TO_MM_Y = A4_HEIGHT_MM / TARGET_HEIGHT_PX
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+def dewarp_document(img):
+    """Bước 1-3: Nắn phẳng và chuẩn hóa ảnh về A4"""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blur, 75, 200)
+
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4:
+            pts = approx.reshape(4, 2)
+            rect = order_points(pts)
+            dst = np.array([
+                [0, 0], [TARGET_WIDTH_PX - 1, 0],
+                [TARGET_WIDTH_PX - 1, TARGET_HEIGHT_PX - 1], [0, TARGET_HEIGHT_PX - 1]
+            ], dtype="float32")
+            M = cv2.getPerspectiveTransform(rect, dst)
+            return cv2.warpPerspective(img, M, (TARGET_WIDTH_PX, TARGET_HEIGHT_PX))
+    return img # Trả về ảnh gốc nếu không tìm thấy giấy
+
+def detect_checkboxes_opencv(warped_img):
+    """Bước 4: Nhận diện Checkbox bằng Rule-based (OpenCV)"""
+    checkboxes = []
+    gray = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    cb_id = 1
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        aspect_ratio = w / float(h)
+        area = w * h
+        # Rule: Là hình vuông (tỷ lệ 0.85 - 1.15) và có diện tích vừa phải (không phải chấm nhiễu, không phải viền bảng)
+        if 0.85 <= aspect_ratio <= 1.15 and 200 <= area <= 1500:
+            checkboxes.append({
+                "id": f"cb_auto_{cb_id}",
+                "type": "Checkbox",
+                "x_mm": round(x * PX_TO_MM_X, 2),
+                "y_mm": round(y * PX_TO_MM_Y, 2),
+                "width_mm": round(w * PX_TO_MM_X, 2),
+                "height_mm": round(h * PX_TO_MM_Y, 2),
+                "checked": False # Mặc định false
+            })
+            cb_id += 1
+    return checkboxes
+
+def detect_text_paddleocr(warped_img):
+    """Bước 5: Nhận diện Text Box và Nội dung bằng PaddleOCR"""
+    texts = []
+    result = ocr_engine.ocr(warped_img, cls=True)
+    
+    txt_id = 1
+    if result[0] is not None:
+        for line in result[0]:
+            box = line[0] # [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+            text_content = line[1][0]
+            
+            # Tính Bounding Box (x, y, w, h) từ 4 điểm
+            x_min = min(p[0] for p in box)
+            y_min = min(p[1] for p in box)
+            x_max = max(p[0] for p in box)
+            y_max = max(p[1] for p in box)
+            
+            w = x_max - x_min
+            h = y_max - y_min
+            
+            texts.append({
+                "id": f"txt_auto_{txt_id}",
+                "type": "Text",
+                "x_mm": round(x_min * PX_TO_MM_X, 2),
+                "y_mm": round(y_min * PX_TO_MM_Y, 2),
+                "width_mm": round(w * PX_TO_MM_X, 2),
+                "height_mm": round(h * PX_TO_MM_Y, 2),
+                "content": text_content,
+                "is_static": True # Ở bước 6 Heuristic sẽ phân loại cái nào là Label (Tĩnh), cái nào là Value (Động)
+            })
+            txt_id += 1
+    return texts
+
+@app.post("/api/v1/analyze-document")
+async def analyze_document(file: UploadFile = File(...)):
+    image_bytes = await file.read()
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    # 1. Nắn ảnh
+    warped_img = dewarp_document(img)
+    
+    # 2. Quét Checkbox (CV)
+    checkbox_elements = detect_checkboxes_opencv(warped_img)
+    
+    # 3. Quét Text (Pre-trained OCR)
+    text_elements = detect_text_paddleocr(warped_img)
+    
+    # 4. Gộp Layout (Bước 6 gom nhóm Heuristic sẽ xử lý sau, tạm thời gộp mảng)
+    all_elements = text_elements + checkbox_elements
+    
+    return JSONResponse(content={
+        "status": "success",
+        "message": "CV and Pre-trained AI analysis completed",
+        "data": {
+            "elements": all_elements
+        }
+    })
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+</file>
 
 <file path="docs/phases/KẾ HOẠCH PHÁT TRIỂN SẢN PHẨM — TEMPLATE WORKSPACE v2.md">
 # KẾ HOẠCH PHÁT TRIỂN SẢN PHẨM — TEMPLATE WORKSPACE v2
@@ -947,6 +1366,299 @@ MVP không nhằm xây một nền tảng quản lý công việc toàn diện.
 MVP nhằm kiểm chứng một giả thuyết đơn giản:
 
 > **"Người dùng có muốn lưu cách làm của mình thành Template và quay lại sử dụng nó thay vì làm lại từ đầu hay không?"**
+</file>
+
+<file path="document-analyzer/main.py">
+import os
+# KHÓA CHẶT PADDLE ENGINE NGAY TỪ DÒNG ĐẦU TIÊN CỦA APP
+os.environ["FLAGS_enable_pir_api"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["PD_ENABLE_MKLDNN"] = "0"
+
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+import cv2
+import numpy as np
+import io
+
+# Import processor sau khi đã set biến môi trường
+from processor import analyze_document
+
+app = FastAPI(title="Template Workspace CV API")
+
+# Enable CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,  # ĐÃ SỬA THÀNH FALSE ĐỂ FIX LỖI CORS
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/api/analyze")
+async def analyze(file: UploadFile = File(...)):
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if image is None:
+        return {"status": "error", "message": "Invalid image file"}
+    
+    elements = analyze_document(image)
+    
+    return {
+        "status": "success",
+        "data": {
+            "elements": elements
+        }
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+</file>
+
+<file path="document-analyzer/processor.py">
+import cv2
+import numpy as np
+import uuid
+import easyocr
+
+# Khởi tạo EasyOCR
+reader = easyocr.Reader(['vi', 'en'], gpu=False)
+
+# Kích thước chuẩn Pixel (Tỷ lệ A4) và kích thước thực tế (mm)
+TARGET_WIDTH_PX, TARGET_HEIGHT_PX = 840, 1188
+A4_WIDTH_MM, A4_HEIGHT_MM = 210.0, 297.0
+
+# TỶ LỆ CỐ ĐỊNH: Chống giãn chữ khi chụp màn hình một phần nhỏ
+FIXED_RATIO_X = A4_WIDTH_MM / TARGET_WIDTH_PX
+FIXED_RATIO_Y = A4_HEIGHT_MM / TARGET_HEIGHT_PX
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+def preprocess_image_smart(image: np.ndarray):
+    orig_h, orig_w = image.shape[:2]
+    img_area = orig_w * orig_h
+    
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blur, 75, 200)
+
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        
+        if len(approx) == 4:
+            area = cv2.contourArea(approx)
+            if 0.2 * img_area < area < 0.95 * img_area:
+                # Khóa tỷ lệ: Chỉ nắn phẳng nếu viền có hình dáng giống tờ giấy A4
+                x, y, w, h = cv2.boundingRect(approx)
+                ratio = w / float(h)
+                if (0.6 < ratio < 0.8) or (1.3 < ratio < 1.5):
+                    pts = approx.reshape(4, 2)
+                    rect = order_points(pts)
+                    dst = np.array([
+                        [0, 0], [TARGET_WIDTH_PX - 1, 0],
+                        [TARGET_WIDTH_PX - 1, TARGET_HEIGHT_PX - 1], [0, TARGET_HEIGHT_PX - 1]
+                    ], dtype="float32")
+                    M = cv2.getPerspectiveTransform(rect, dst)
+                    return cv2.warpPerspective(image, M, (TARGET_WIDTH_PX, TARGET_HEIGHT_PX))
+    # Trả về ảnh gốc để bảo toàn độ nét nếu là ảnh screenshot
+    return image
+
+def extract_advanced_text(processed_img: np.ndarray, ratio_x: float, ratio_y: float) -> list:
+    elements = []
+    ZOOM = 3.0
+    
+    zoomed_img = cv2.resize(processed_img, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(zoomed_img, cv2.COLOR_BGR2GRAY)
+    
+    # 1. Xóa đường kẻ khung viền (Line Removal)
+    _, thresh_inv = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    h_lines = cv2.morphologyEx(thresh_inv, cv2.MORPH_OPEN, h_kernel, iterations=1)
+    v_lines = cv2.morphologyEx(thresh_inv, cv2.MORPH_OPEN, v_kernel, iterations=1)
+    mask_lines = cv2.add(h_lines, v_lines)
+    mask_lines = cv2.dilate(mask_lines, np.ones((3,3), np.uint8), iterations=1)
+    
+    gray_cleaned = gray.copy()
+    gray_cleaned[mask_lines == 255] = 255
+    
+    # 2. Smart Bolding: Tăng tương phản và tự động xói mòn nền để tô đậm nét chữ mỏng
+    enhanced_gray = cv2.convertScaleAbs(gray_cleaned, alpha=1.5, beta=-30)
+    kernel_bold = np.ones((2, 2), np.uint8) 
+    bold_gray = cv2.erode(enhanced_gray, kernel_bold, iterations=1)
+    
+    final_cv_img = cv2.cvtColor(bold_gray, cv2.COLOR_GRAY2BGR)
+    
+    # 3. Quét EasyOCR
+    results = reader.readtext(
+        final_cv_img, 
+        adjust_contrast=True, 
+        width_ths=1.2, 
+        x_ths=1.5,
+        blocklist='~^|°ÛÇñ'
+    )
+    
+    for bbox, text, prob in results:
+        if prob < 0.10: 
+            continue
+            
+        x_min = float(min(p[0] for p in bbox)) / ZOOM
+        y_min = float(min(p[1] for p in bbox)) / ZOOM
+        x_max = float(max(p[0] for p in bbox)) / ZOOM
+        y_max = float(max(p[1] for p in bbox)) / ZOOM
+        
+        elements.append({
+            "id": str(uuid.uuid4()),
+            "type": "Text",
+            "x": round(x_min * ratio_x, 2),
+            "y": round(y_min * ratio_y, 2),
+            "width": max(round((x_max - x_min) * ratio_x, 2), 20.0),
+            "height": max(round((y_max - y_min) * ratio_y, 2), 5.0),
+            "content": str(text).strip()
+        })
+    return elements
+
+def extract_checkboxes(processed_img: np.ndarray, ratio_x: float, ratio_y: float) -> list:
+    elements = []
+    gray = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    for cnt in contours:
+        x, y, w_box, h_box = cv2.boundingRect(cnt)
+        aspect_ratio = w_box / float(h_box)
+        area = w_box * h_box
+        if 0.85 <= aspect_ratio <= 1.15 and 200 <= area <= 1500:
+            elements.append({
+                "id": str(uuid.uuid4()),
+                "type": "Checkbox",
+                "x": round(x * ratio_x, 2),
+                "y": round(y * ratio_y, 2),
+                "width": round(w_box * ratio_x, 2),
+                "height": round(h_box * ratio_y, 2),
+                "value": False
+            })
+    return elements
+
+def analyze_document(image: np.ndarray) -> list:
+    processed_img = preprocess_image_smart(image)
+    
+    # Ép tỷ lệ cố định (Chống lỗi bóp méo tọa độ)
+    ratio_x = FIXED_RATIO_X
+    ratio_y = FIXED_RATIO_Y
+
+    elements = extract_advanced_text(processed_img, ratio_x, ratio_y)
+    elements.extend(extract_checkboxes(processed_img, ratio_x, ratio_y))
+
+    return elements
+</file>
+
+<file path="document-analyzer/requirements.txt">
+fastapi
+uvicorn
+opencv-python
+paddleocr
+numpy
+python-multipart
+</file>
+
+<file path="src/hooks/useDocumentAnalyzer.ts">
+import { useState } from 'react';
+
+export function useDocumentAnalyzer() {
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const analyzeImage = async (file: File) => {
+    setIsAnalyzing(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('http://127.0.0.1:8000/api/analyze', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('API error');
+      
+      const json = await response.json();
+      if (json.status === 'success') {
+        const rawElements = json.data.elements;
+        
+        // LOG RA ĐỂ KIỂM TRA DỮ LIỆU THẬT
+        console.log("Dữ liệu thô từ Backend:", rawElements);
+
+        // Chuẩn hóa (Map) dữ liệu API về đúng chuẩn Element của React
+        const mappedElements = rawElements.map((el: any) => {
+          const id = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          
+          if (el.type === 'Text' || el.type === 'text') {
+            return {
+              id,
+              element_type: 'Text',
+              position_x_mm: el.x || 0,
+              position_y_mm: el.y || 0,
+              width_mm: el.w || 50,
+              height_mm: el.h || 10,
+              properties: {
+                type: 'Text',
+                content: el.content || "Văn bản mới",
+                font_family: "Roboto-Regular",
+                font_size: 12,
+                is_bold: false,
+                is_italic: false,
+                is_underline: false,
+                alignment: "left",
+              }
+            };
+          }
+          if (el.type === 'Checkbox' || el.type === 'checkbox') {
+            return {
+              id,
+              element_type: 'Checkbox',
+              position_x_mm: el.x || 0,
+              position_y_mm: el.y || 0,
+              width_mm: el.w || 10,
+              height_mm: el.h || 10,
+              properties: {
+                type: 'Checkbox',
+                checked: el.checked || false,
+              }
+            };
+          }
+          return null;
+        }).filter((el: any) => el !== null);
+
+        console.log("Dữ liệu sau khi Map chuẩn:", mappedElements);
+        return mappedElements;
+      }
+      return [];
+    } catch (error) {
+      console.error("Lỗi khi phân tích tài liệu:", error);
+      alert("Không thể kết nối đến Analyzer Backend (127.0.0.1:8000)");
+      return [];
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  return { analyzeImage, isAnalyzing };
+}
 </file>
 
 <file path="docs/decisions/02-docx-spike-result.md">
@@ -4059,6 +4771,641 @@ chrono = "0.4"
 }
 </file>
 
+<file path="src/LibraryView.tsx">
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
+import { Search, Plus, FileText, LayoutTemplate, Trash2, Edit3, Download, LogOut, Layers } from "lucide-react";
+import { Template, Document } from "./App";
+import { exportToPdf } from "./editor/pdfExporter";
+import { useToast } from "./components/Toast";
+
+interface LibraryViewProps {
+  onLogout: () => void;
+}
+
+export function LibraryView({ onLogout }: LibraryViewProps) {
+  const { showToast, ToastComponent } = useToast();
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [modal, setModal] = useState<{ type: "prompt" | "confirm"; message: string; onConfirm: (val?: string) => void; onCancel: () => void; } | null>(null);
+  const [inputValue, setInputValue] = useState("");
+
+  const handleExportPdf = async (d: any) => {
+    showToast("Đang khởi tạo và xuất PDF...", "loading");
+    try {
+      await exportToPdf(JSON.parse(d.metadata), d.name);
+      showToast("Xuất PDF thành công!", "success");
+    } catch (err) {
+      showToast("Xuất PDF thất bại!", "error");
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    const unlisten = listen("item-saved", () => {
+      loadData();
+    });
+    return () => {
+      unlisten.then(f => f());
+    };
+  }, [activeTab]);
+
+  async function loadData() {
+    if (activeTab === "templates") {
+      setTemplates(await invoke("get_templates"));
+    } else {
+      setDocuments(await invoke("get_documents"));
+    }
+  }
+
+  const openAppWindow = async (label: string, path: string, title: string) => {
+    showToast(`Đang mở: ${title}...`, "loading");
+    try {
+      const existingWin = await WebviewWindow.getByLabel(label);
+      if (existingWin) {
+        await existingWin.setFocus();
+        showToast("Đã chuyển sang cửa sổ đang mở!", "success");
+        return;
+      }
+
+      const win = new WebviewWindow(label, {
+        url: path,
+        title: title,
+        width: 1280,
+        height: 800,
+        minWidth: 960,
+        minHeight: 640,
+      });
+
+      win.once("tauri://created", () => {
+        showToast("Đã mở cửa sổ thành công!", "success");
+      });
+
+      win.once("tauri://error", (e) => {
+        console.error("Window Error:", e);
+        showToast(`Lỗi tạo cửa sổ: ${JSON.stringify(e)}`, "error");
+      });
+    } catch (err) {
+      console.error("Open Window Exception:", err);
+      showToast(`Lỗi hệ thống: ${String(err)}`, "error");
+    }
+  };
+
+  async function useTemplate(templateId: number) {
+    setModal({
+      type: "prompt",
+      message: "Nhập tên tài liệu mới:",
+      onConfirm: async (name) => {
+        if (name) {
+          const docId = await invoke<number>("create_document", { name, templateId });
+          setActiveTab("documents");
+          loadData();
+          setModal(null);
+          openAppWindow(`document-${docId}`, `/#/document/${docId}`, `Document: ${name}`);
+        }
+      },
+      onCancel: () => setModal(null)
+    });
+  }
+
+  async function handleDelete(type: "template" | "document", id: number) {
+    setModal({
+      type: "confirm",
+      message: `Bạn có chắc chắn muốn xóa ${type === "template" ? "template" : "tài liệu"} này không? Hành động này không thể hoàn tác.`,
+      onConfirm: async () => {
+        await invoke(type === "template" ? "delete_template" : "delete_document", { id });
+        loadData();
+        setModal(null);
+      },
+      onCancel: () => setModal(null)
+    });
+  }
+
+  const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  return (
+    <div style={{ minHeight: "100vh", backgroundColor: "#fafafa" }}>
+      <style>{` .actions { opacity: 0 !important; transition: opacity 0.2s; } .document-card:hover .actions { opacity: 1 !important; } `}</style>
+      <nav style={{ height: "64px", backgroundColor: "#ffffff", borderBottom: "1px solid #e4e4e7", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", fontWeight: "600", fontSize: "16px", color: "#18181b" }}>
+          <Layers size={20}/> Template Workspace
+        </div>
+        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f4f4f5", padding: "4px", borderRadius: "8px" }}>
+          <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", color: activeTab === "templates" ? "#18181b" : "#71717a", boxShadow: activeTab === "templates" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("templates")}>Templates</button>
+          <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", color: activeTab === "documents" ? "#18181b" : "#71717a", boxShadow: activeTab === "documents" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("documents")}>Documents</button>
+        </div>
+        <button style={{ background: "none", border: "1px solid #e4e4e7", color: "#71717a", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }} onClick={onLogout}>
+          <LogOut size={14}/> Logout
+        </button>
+      </nav>
+
+      <div style={{ padding: "32px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" }}>
+          <h2 style={{ fontSize: "18px", fontWeight: "600", margin: "0", color: "#18181b" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
+          <div style={{ display: "flex", gap: "12px" }}>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <Search color="#a1a1aa" size={16} style={{ position: "absolute", left: "10px" }} />
+              <input style={{ padding: "8px 12px 8px 32px", borderRadius: "8px", border: "1px solid #e4e4e7", fontSize: "13px", width: "200px" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            </div>
+            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#18181b", color: "white", border: "none", borderRadius: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", display: "flex", alignItems: "center", gap: "6px" }} onClick={() => openAppWindow("template-new", "/#/template/new", "Tạo Template Mới")}><Plus size={16}/> Tạo mới</button>}
+          </div>
+        </div>
+
+        {filteredData.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "80px", border: "1px dashed #e4e4e7", borderRadius: "12px", color: "#71717a", fontSize: "14px" }}>Chưa có tài liệu nào.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
+            {filteredData.map((item: any) => (
+              <div key={item.id} className="document-card" style={{ backgroundColor: "#ffffff", padding: "20px", borderRadius: "10px", border: "1px solid #e4e4e7", display: "flex", flexDirection: "column", gap: "16px", transition: "border 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#a1a1aa"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e4e4e7"; }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+                  <div style={{ fontSize: "15px", fontWeight: "600", color: "#18181b" }}>{item.name}</div>
+                  <div style={{ color: "#a1a1aa" }}>{activeTab === "templates" ? <LayoutTemplate size={18}/> : <FileText size={18}/>}</div>
+                </div>
+                <div style={{ fontSize: "13px", color: "#71717a" }}>{item.description || "Không có mô tả"}</div>
+                <div style={{ marginTop: "auto", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px", opacity: 0, transition: "opacity 0.2s" }} className="actions">
+                  {activeTab === "templates" ? (
+                    <>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)} title="Dùng"><FileText size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`template-${item.id}`, `/#/template/${item.id}`, `Template: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)} title="Xóa"><Trash2 size={16}/></button>
+                    </>
+                  ) : (
+                    <>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`document-${item.id}`, `/#/document/${item.id}`, `Document: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)} title="Xuất PDF"><Download size={16}/></button>
+                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)} title="Xóa"><Trash2 size={16}/></button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.2)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ backgroundColor: "white", padding: "24px", borderRadius: "12px", width: "360px", border: "1px solid #e4e4e7" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: "15px", fontWeight: 600 }}>{modal.type === "prompt" ? "Tạo tài liệu mới" : "Xác nhận xóa"}</h3>
+            <p style={{ margin: "0 0 20px", fontSize: "13px", color: "#71717a" }}>{modal.message}</p>
+            {modal.type === "prompt" && (
+              <input autoFocus style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #e4e4e7", marginBottom: "20px", fontSize: "13px" }} placeholder="Tên tài liệu..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} />
+            )}
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid #e4e4e7", background: "white", cursor: "pointer", fontSize: "13px" }} onClick={modal.onCancel}>Hủy</button>
+              <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", background: modal.type === "confirm" ? "#dc2626" : "#18181b", color: "white", cursor: "pointer", fontSize: "13px" }} onClick={() => modal.onConfirm(inputValue)}>{modal.type === "confirm" ? "Xóa vĩnh viễn" : "Tạo tài liệu"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {ToastComponent}
+    </div>
+  );
+}
+</file>
+
+<file path="src-tauri/src/repo.rs">
+use rusqlite::Connection;
+use crate::models::{User, Template, Document, DocumentContent, Element, ElementType, ElementProperties};
+use crate::error::AppError;
+use bcrypt::{hash, DEFAULT_COST};
+
+pub struct DbState(pub std::sync::Mutex<Connection>);
+
+pub struct UserRepo;
+
+impl UserRepo {
+    pub fn create(conn: &Connection, username: &str, password: &str) -> Result<i64, AppError> {
+        let hashed = hash(password, DEFAULT_COST)?;
+        conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
+            (username, hashed),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn find_by_username(conn: &Connection, username: &str) -> Result<Option<User>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, username, password_hash FROM users WHERE username = ?1")?;
+        let mut user_iter = stmt.query_map([username], |row| {
+            Ok(User {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                password_hash: row.get(2)?,
+            })
+        })?;
+        
+        Ok(user_iter.next().map(|r| r.unwrap()))
+    }
+}
+
+pub struct TemplateRepo;
+
+impl TemplateRepo {
+    pub fn create(conn: &Connection, user_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<i64, AppError> {
+        if name != "Blank Template" {
+            let count = Self::count_for_user(conn, user_id)?;
+            if count >= 3 {
+                return Err(AppError::ValidationError("Template slot limit reached".into()));
+            }
+        }
+        conn.execute(
+            "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 0)",
+            (user_id, name, description, metadata),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Template>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1")?;
+        let template_iter = stmt.query_map([user_id], |row| {
+            Ok(Template {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                category_id: row.get(4)?,
+                thumbnail_asset_id: row.get(5)?,
+                metadata: row.get(6)?,
+                is_system: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        
+        let mut templates = Vec::new();
+        for template in template_iter {
+            templates.push(template?);
+        }
+        Ok(templates)
+    }
+
+    pub fn search_by_user(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Template>, AppError> {
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
+        let template_iter = stmt.query_map((user_id, pattern), |row| {
+            Ok(Template {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                category_id: row.get(4)?,
+                thumbnail_asset_id: row.get(5)?,
+                metadata: row.get(6)?,
+                is_system: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        
+        let mut templates = Vec::new();
+        for template in template_iter {
+            templates.push(template?);
+        }
+        Ok(templates)
+    }
+
+    pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64, AppError> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND is_system = 0",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
+        conn.execute(
+            "DELETE FROM templates WHERE id = ?1 AND user_id = ?2",
+            (id, user_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update(conn: &Connection, template_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<(), AppError> {
+        conn.execute(
+            "UPDATE templates SET name = ?1, description = ?2, metadata = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+            (name, description, metadata, template_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn seed_for_user(conn: &Connection, user_id: i64) -> Result<(), AppError> {
+        let templates = ["Test Case", "Bug Report", "Meeting Notes", "Blank Template"];
+        let default_content = DocumentContent::default_content();
+
+        for name in templates.iter() {
+            let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
+                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
+                (user_id, *name),
+                |row| Ok(Template {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                    category_id: row.get(4)?,
+                    thumbnail_asset_id: row.get(5)?,
+                    metadata: row.get(6)?,
+                    is_system: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            );
+
+            match existing_template_res {
+                Ok(template) => {
+                    if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
+                        && template.created_at == template.updated_at
+                    {
+                        if let Ok(content) = serde_json::from_str::<DocumentContent>(&template.metadata) {
+                            if content.elements.is_empty() {
+                                let populated = get_populated_content(name);
+                                let json = serde_json::to_string(&populated)?;
+                                Self::update(conn, template.id, &template.name, template.description.as_deref(), &json)?;
+                            }
+                        }
+                    }
+                },
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    let content = if *name == "Blank Template" {
+                        default_content.clone()
+                    } else {
+                        get_populated_content(name)
+                    };
+                    conn.execute(
+                        "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 1)",
+                        (user_id, name, None::<String>, &serde_json::to_string(&content)?),
+                    )?;
+                },
+                Err(e) => return Err(AppError::from(e)),
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn get_populated_content(name: &str) -> DocumentContent {
+    let mut content = DocumentContent::default_content();
+    match name {
+        "Bug Report" => {
+            content.elements = vec![
+                create_text_el("Tiêu đề lỗi", 10.0, 10.0),
+                create_text_el("Mô tả", 10.0, 25.0),
+                create_text_el("Các bước tái hiện", 10.0, 40.0),
+                create_text_el("Kết quả mong đợi", 10.0, 55.0),
+                create_text_el("Kết quả thực tế", 10.0, 70.0),
+                create_text_el("Độ nghiêm trọng", 10.0, 85.0),
+            ];
+        },
+        "Test Case" => {
+            content.elements = vec![
+                create_text_el("Tên Test Case", 10.0, 10.0),
+                create_text_el("Điều kiện tiên quyết", 10.0, 25.0),
+                create_text_el("Các bước", 10.0, 40.0),
+                create_text_el("Kết quả mong đợi", 10.0, 55.0),
+                create_text_el("Kết quả thực tế", 10.0, 70.0),
+                create_text_el("Trạng thái", 10.0, 85.0),
+            ];
+        },
+        "Meeting Notes" => {
+            content.elements = vec![
+                create_text_el("Tiêu đề cuộc họp", 10.0, 10.0),
+                create_text_el("Ngày", 10.0, 25.0),
+                create_text_el("Người tham gia", 10.0, 40.0),
+                create_text_el("Nội dung", 10.0, 55.0),
+                create_text_el("Kết luận", 10.0, 70.0),
+            ];
+        },
+        _ => {},
+    }
+    content
+}
+
+fn create_text_el(content: &str, x: f64, y: f64) -> Element {
+    Element {
+        id: format!("el-seed-{}", content),
+        element_type: ElementType::Text,
+        position_x_mm: x,
+        position_y_mm: y,
+        width_mm: 100.0,
+        height_mm: 10.0,
+        properties: ElementProperties::Text {
+            content: content.into(),
+            font_family: "Arial".into(),
+            font_size: 12.0,
+            is_bold: true,
+            is_italic: false,
+            is_underline: false,
+            alignment: "left".into(),
+        }
+    }
+}
+
+pub struct DocumentRepo;
+
+impl DocumentRepo {
+    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
+        let content_to_store = if let Some(template_id) = source_template_id {
+            let template_metadata: String = conn.query_row(
+                "SELECT metadata FROM templates WHERE id = ?1",
+                [template_id],
+                |row| row.get(0),
+            )?;
+            
+            if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
+                serde_json::to_string(&doc_content)
+                    .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
+            } else {
+                template_metadata
+            }
+        } else {
+            metadata.map(|s| s.to_string()).unwrap_or_else(|| serde_json::to_string(&DocumentContent::default_content()).unwrap())
+        };
+
+        conn.execute(
+            "INSERT INTO documents (user_id, source_template_id, name, metadata) VALUES (?1, ?2, ?3, ?4)",
+            (user_id, source_template_id, name, content_to_store),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Document>, AppError> {
+        let mut stmt = conn.prepare("SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE user_id = ?1")?;
+        let doc_iter = stmt.query_map([user_id], |row| {
+            Ok(Document {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_template_id: row.get(2)?,
+                name: row.get(3)?,
+                metadata: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        
+        let mut docs = Vec::new();
+        for doc in doc_iter {
+            docs.push(doc?);
+        }
+        Ok(docs)
+    }
+
+    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
+        conn.execute(
+            "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
+            (id, user_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update(conn: &Connection, id: i64, metadata: &str) -> Result<(), AppError> {
+        conn.execute(
+            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            (metadata, id),
+        )?;
+        Ok(())
+    }
+}
+
+pub struct AssetRepo;
+
+impl AssetRepo {
+    pub fn create(conn: &Connection, user_id: i64, asset_type: &str, path: &str) -> Result<i64, AppError> {
+        conn.execute(
+            "INSERT INTO assets (user_id, type, path) VALUES (?1, ?2, ?3)",
+            (user_id, asset_type, path),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "tauri-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^1.39.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}
+</file>
+
+<file path="src/editor/pdfExporter.ts">
+import { jsPDF } from "jspdf";
+import { DocumentContent } from "../App";
+import { invoke } from "@tauri-apps/api/core";
+import { ROBOTO_REGULAR_BASE64, ROBOTO_BOLD_BASE64 } from "./fontsBase64";
+
+async function loadUnicodeFont(doc: jsPDF) {
+  try {
+    // Nạp font Regular
+    doc.addFileToVFS('Roboto-Regular.ttf', ROBOTO_REGULAR_BASE64);
+    doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
+
+    // Nạp font Bold
+    doc.addFileToVFS('Roboto-Bold.ttf', ROBOTO_BOLD_BASE64);
+    doc.addFont('Roboto-Bold.ttf', 'Roboto', 'bold');
+
+    // Đặt font mặc định
+    doc.setFont('Roboto');
+  } catch (err) {
+    console.warn("--> Dùng font helvetica dự phòng:", err);
+    doc.setFont("helvetica", "normal");
+  }
+}
+
+export async function exportToPdf(content: DocumentContent, fileName: string) {
+  try {
+    if (!content || !content.page) {
+      throw new Error("Dữ liệu tài liệu không hợp lệ!");
+    }
+
+    const width = content.page.width_mm || 210;
+    const height = content.page.height_mm || 297;
+    const orientation = width > height ? "landscape" : "portrait";
+
+    const doc = new jsPDF({
+      unit: "mm",
+      format: [width, height],
+      orientation,
+    });
+
+    await loadUnicodeFont(doc);
+
+    for (const el of content.elements) {
+      const x = el.position_x_mm || 0;
+      const y = el.position_y_mm || 0;
+      const w = el.width_mm || 40;
+      const h = el.height_mm || 10;
+      const props = (el.properties as any) || {};
+
+      switch (el.element_type) {
+        case "Text": {
+          doc.setFontSize(props.font_size || 12);
+          doc.setFont("Roboto", props.is_bold ? "bold" : "normal");
+          doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
+          break;
+        }
+        case "Checkbox": {
+          doc.rect(x, y, Math.min(w, h, 6), Math.min(w, h, 6));
+          if (props.checked) {
+            doc.setFontSize(10);
+            doc.setFont("Roboto", "bold");
+            doc.text("X", x + 1.2, y + 1.2, { baseline: "top" });
+          }
+          break;
+        }
+        case "Image": {
+          const assetId = props.asset_id;
+          if (assetId) {
+            try {
+              const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
+              doc.addImage(dataUrl, "PNG", x, y, w, h);
+            } catch (err) {
+              doc.rect(x, y, w, h);
+            }
+          } else {
+            doc.rect(x, y, w, h);
+          }
+          break;
+        }
+      }
+    }
+
+    const safeName = (fileName || "document").replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf";
+    doc.save(safeName);
+  } catch (err: any) {
+    console.error("--> Lỗi khi xuất PDF:", err);
+    throw err;
+  }
+}
+</file>
+
 <file path="src/editor/SharedWorkspace.tsx">
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -4091,6 +5438,7 @@ import {
 import { mmToPx, pxToMm } from "./coordinates";
 import { Element, DocumentContent } from "../App";
 import { exportToPdf } from "./pdfExporter";
+import { useDocumentAnalyzer } from '../hooks/useDocumentAnalyzer';
 import { useToast } from "../components/Toast";
 
 export interface SharedWorkspaceProps {
@@ -4129,7 +5477,7 @@ function deepEqual(obj1: any, obj2: any): boolean {
   return true;
 }
 
-function ImageElement({ assetId, width, height }: { assetId: number; width?: number; height?: number }) {
+function ImageElement({ assetId }: { assetId: number; width?: number; height?: number }) {
   const [src, setSrc] = useState<string>("");
   useEffect(() => {
     if (assetId) {
@@ -4138,16 +5486,18 @@ function ImageElement({ assetId, width, height }: { assetId: number; width?: num
         .catch(console.error);
     }
   }, [assetId]);
+
   return src ? (
     <img
       src={src}
       draggable={false}
       style={{
-        width: width ? `${mmToPx(width)}px` : "100%",
-        height: height ? `${mmToPx(height)}px` : "100%",
-        objectFit: "cover",
+        width: "100%",
+        height: "100%",
+        objectFit: "contain",
         pointerEvents: "none",
         userSelect: "none",
+        display: "block",
       }}
     />
   ) : (
@@ -4157,8 +5507,8 @@ function ImageElement({ assetId, width, height }: { assetId: number; width?: num
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        width: width ? `${mmToPx(width)}px` : "100%",
-        height: height ? `${mmToPx(height)}px` : "100%",
+        width: "100%",
+        height: "100%",
         background: "#f8fafc",
         color: "#a1a1aa",
         fontSize: "11px",
@@ -4185,6 +5535,7 @@ export function SharedWorkspace({
   lastSavedStateRef,
 }: SharedWorkspaceProps) {
   const { showToast, ToastComponent } = useToast();
+  const { analyzeImage, isAnalyzing } = useDocumentAnalyzer();
   const [selectedElementId, setSelectedElementId] = useState<string | null>(
     null,
   );
@@ -4195,6 +5546,118 @@ export function SharedWorkspace({
   const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
   const [zoom, setZoom] = useState<number>(1);
   const zoomRef = useRef(zoom);
+  const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const panStartRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number }>({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  // Danh sách các mốc zoom chuẩn
+  const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+
+  const handleZoomChange = (newZoom: number, focalPoint?: { x: number; y: number }) => {
+    const clampedZoom = Math.min(3.0, Math.max(0.25, Math.round(newZoom * 100) / 100));
+    const container = scrollContainerRef.current;
+
+    if (container && focalPoint) {
+      const prevZoom = zoomRef.current;
+      const rect = container.getBoundingClientRect();
+      const mouseX = focalPoint.x - rect.left;
+      const mouseY = focalPoint.y - rect.top;
+
+      const newScrollLeft = (container.scrollLeft + mouseX) * (clampedZoom / prevZoom) - mouseX;
+      const newScrollTop = (container.scrollTop + mouseY) * (clampedZoom / prevZoom) - mouseY;
+
+      setZoom(clampedZoom);
+      zoomRef.current = clampedZoom;
+
+      requestAnimationFrame(() => {
+        container.scrollLeft = newScrollLeft;
+        container.scrollTop = newScrollTop;
+      });
+    } else {
+      setZoom(clampedZoom);
+      zoomRef.current = clampedZoom;
+    }
+  };
+
+  const handleFitToScreen = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const paddingX = 64;
+    const paddingY = 96;
+    const availW = container.clientWidth - paddingX;
+    const availH = container.clientHeight - paddingY;
+    const pageW = mmToPx(content.page?.width_mm || 210);
+    const pageH = mmToPx(content.page?.height_mm || 297);
+
+    const fitScale = Math.min(availW / pageW, availH / pageH);
+    const targetZoom = Math.min(2.0, Math.max(0.25, Math.round(fitScale * 100) / 100));
+    setZoom(targetZoom);
+    zoomRef.current = targetZoom;
+
+    requestAnimationFrame(() => {
+      container.scrollLeft = (container.scrollWidth - container.clientWidth) / 2;
+      container.scrollTop = 0;
+    });
+  };
+
+  // Xử lý Ctrl + Lăn chuột để zoom vào vị trí con trỏ chuột
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const zoomFactor = e.deltaY < 0 ? 1.12 : 0.88;
+        const targetZoom = zoomRef.current * zoomFactor;
+        handleZoomChange(targetZoom, { x: e.clientX, y: e.clientY });
+      }
+    };
+
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
+  // Xử lý phím tắt Zoom (Ctrl +, Ctrl -, Ctrl 0, Shift 1) và giữ phím Space
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (editingIdRef.current !== null || activeTag === "input" || activeTag === "textarea") return;
+
+      const isCtrl = e.ctrlKey || e.metaKey;
+      if (isCtrl && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        handleZoomChange(zoomRef.current + 0.15);
+      } else if (isCtrl && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        handleZoomChange(zoomRef.current - 0.15);
+      } else if (isCtrl && e.key === "0") {
+        e.preventDefault();
+        handleZoomChange(1.0);
+      } else if (e.shiftKey && e.key === "!") { // Shift + 1
+        e.preventDefault();
+        handleFitToScreen();
+      } else if (e.code === "Space" && !e.repeat && !isSpacePressed) {
+        setIsSpacePressed(true);
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        setIsSpacePressed(false);
+        setIsPanning(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [isSpacePressed]);
 
   const [dragInfo, setDragInfo] = useState<{
     elementId: string;
@@ -4503,61 +5966,75 @@ export function SharedWorkspace({
         }));
       } else if (resizeInfo) {
         const currentZoom = zoomRef.current;
-        const deltaX = pxToMm(e.movementX / currentZoom);
-        const deltaY = pxToMm(e.movementY / currentZoom);
-        let { handle, elementId } = resizeInfo;
+        const totalDeltaX = pxToMm((e.clientX - resizeInfo.startX) / currentZoom);
+        const totalDeltaY = pxToMm((e.clientY - resizeInfo.startY) / currentZoom);
+        const { handle, elementId, initX, initY, initW, initH } = resizeInfo;
+        const minW = 5;
+        const minH = 5;
 
-        // Accumulate delta into init values
-        resizeInfo.startX = e.clientX;
-        resizeInfo.startY = e.clientY;
-        resizeInfo.initW += deltaX;
-        resizeInfo.initH += deltaY;
-        resizeInfo.initX += (handle.includes('w') ? deltaX : 0);
-        resizeInfo.initY += (handle.includes('n') ? deltaY : 0);
-        
-        let newX = resizeInfo.initX,
-          newY = resizeInfo.initY,
-          newW = resizeInfo.initW,
-          newH = resizeInfo.initH;
-        const minW = 5,
-          minH = 5;
+        const currentEl = contentRef.current.elements.find(el => el.id === elementId);
+        const isImage = currentEl?.element_type === "Image";
+        const lockAspect = isImage || e.shiftKey;
+        const aspectRatio = initW / (initH || 1);
 
-        // Calculate new bounds based on handle movement
-        if (handle.includes("e")) {
-          newW = Math.max(minW, newW);
-        }
-        if (handle.includes("w")) {
-          newW = Math.max(minW, newW);
-        }
-        if (handle.includes("s")) {
-          newH = Math.max(minH, newH);
-        }
-        if (handle.includes("n")) {
-          newH = Math.max(minH, newH);
-        }
+        let newX = initX;
+        let newY = initY;
+        let newW = initW;
+        let newH = initH;
 
-        if (snapEnabledRef.current && !isAlt) {
-          // Snap position and size separately
-          newX = snapVal(newX, 5);
-          newY = snapVal(newY, 5);
-          newW = Math.max(minW, snapVal(newW, 5));
-          newH = Math.max(minH, snapVal(minH, 5));
+        if (lockAspect && ["nw", "ne", "se", "sw"].includes(handle)) {
+          // Khóa tỷ lệ khi kéo các điểm góc
+          let delta = Math.abs(totalDeltaX) > Math.abs(totalDeltaY) ? totalDeltaX : totalDeltaY;
+          if (handle === "se") {
+            newW = Math.max(minW, initW + delta);
+            newH = newW / aspectRatio;
+          } else if (handle === "sw") {
+            newW = Math.max(minW, initW - delta);
+            newH = newW / aspectRatio;
+            newX = initX + (initW - newW);
+          } else if (handle === "ne") {
+            newW = Math.max(minW, initW + delta);
+            newH = newW / aspectRatio;
+            newY = initY + (initH - newH);
+          } else if (handle === "nw") {
+            newW = Math.max(minW, initW - delta);
+            newH = newW / aspectRatio;
+            newX = initX + (initW - newW);
+            newY = initY + (initH - newH);
+          }
         } else {
-          newX = Math.round(newX * 10) / 10;
-          newY = Math.round(newY * 10) / 10;
-          newW = Math.round(newW * 10) / 10;
-          newH = Math.round(newH * 10) / 10;
+          // Kéo tự do theo các cạnh
+          if (handle.includes("e")) {
+            const rawW = initW + totalDeltaX;
+            newW = Math.max(minW, snapEnabledRef.current && !isAlt ? snapVal(initX + rawW, 5) - initX : rawW);
+          } else if (handle.includes("w")) {
+            const rightEdge = initX + initW;
+            const rawX = initX + totalDeltaX;
+            newX = Math.min(rightEdge - minW, snapEnabledRef.current && !isAlt ? snapVal(rawX, 5) : rawX);
+            newW = rightEdge - newX;
+          }
+
+          if (handle.includes("s")) {
+            const rawH = initH + totalDeltaY;
+            newH = Math.max(minH, snapEnabledRef.current && !isAlt ? snapVal(initY + rawH, 5) - initY : rawH);
+          } else if (handle.includes("n")) {
+            const bottomEdge = initY + initH;
+            const rawY = initY + totalDeltaY;
+            newY = Math.min(bottomEdge - minH, snapEnabledRef.current && !isAlt ? snapVal(rawY, 5) : rawY);
+            newH = bottomEdge - newY;
+          }
         }
+
         setContent((prev) => ({
           ...prev,
           elements: prev.elements.map((item) =>
             item.id === elementId
               ? {
                   ...item,
-                  position_x_mm: newX,
-                  position_y_mm: newY,
-                  width_mm: newW,
-                  height_mm: newH,
+                  position_x_mm: Math.round(newX * 10) / 10,
+                  position_y_mm: Math.round(newY * 10) / 10,
+                  width_mm: Math.round(newW * 10) / 10,
+                  height_mm: Math.round(newH * 10) / 10,
                 }
               : item,
           ),
@@ -4742,6 +6219,26 @@ export function SharedWorkspace({
     setContextMenu(null);
   };
 
+  const handleScanDocument = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const scannedElements = await analyzeImage(file);
+    if (scannedElements && scannedElements.length > 0) {
+      saveSnapshot(); // Lưu lịch sử Undo
+      
+      // Nối elements mới vào (Append)
+      setContent((prev) => ({
+        ...prev,
+        elements: [...prev.elements, ...scannedElements]
+      }));
+      showToast("Đã phân tích tài liệu thành công!", "success");
+    }
+    
+    // Reset file input
+    e.target.value = '';
+  };
+
   const selectedElement = content.elements.find(
     (e) => e.id === selectedElementId,
   );
@@ -4884,6 +6381,32 @@ export function SharedWorkspace({
           >
             <ImageIcon size={16} /> Hình ảnh
           </button>
+          
+          <button
+            disabled={isAnalyzing}
+            style={{
+              backgroundColor: isAnalyzing ? "#f4f4f5" : "#ffffff",
+              border: "1px solid #e4e4e7",
+              padding: "6px 10px",
+              borderRadius: "6px",
+              fontSize: "13px",
+              color: isAnalyzing ? "#a1a1aa" : "#18181b",
+              cursor: isAnalyzing ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
+            onClick={() => {
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = 'image/*';
+              input.onchange = (e) => handleScanDocument(e as any);
+              input.click();
+            }}
+          >
+            <RefreshCw size={16} /> {isAnalyzing ? 'Đang phân tích...' : 'Scan'}
+          </button>
+          
           <button
             style={{
               backgroundColor: "#ffffff",
@@ -4904,9 +6427,65 @@ export function SharedWorkspace({
             {isLandscape ? <Columns size={16} /> : <Rows size={16} />} Xoay
           </button>
           <div style={{ display: "flex", alignItems: "center", backgroundColor: "#ffffff", border: "1px solid #e4e4e7", borderRadius: "6px", height: "31px", marginLeft: "8px", overflow: "hidden", flexShrink: 0 }}>
-            <button onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom > 0.5 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>-</button>
-            <span style={{ fontSize: "13px", minWidth: "44px", textAlign: "center", color: "#18181b", fontWeight: 500 }}>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom(z => Math.min(3.0, z + 0.1))} style={{ padding: "0 10px", border: "none", background: "none", cursor: zoom < 3.0 ? "pointer" : "not-allowed", color: "#18181b", height: "100%" }}>+</button>
+            <button 
+              onClick={() => handleZoomChange(zoom - 0.1)} 
+              title="Thu nhỏ (Ctrl -)"
+              style={{ padding: "0 8px", border: "none", background: "none", cursor: zoom > 0.25 ? "pointer" : "not-allowed", color: "#18181b", height: "100%", fontSize: "14px", fontWeight: 600 }}
+            >
+              -
+            </button>
+            
+            <select
+              value={zoom}
+              onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
+              style={{
+                fontSize: "12px",
+                fontWeight: 500,
+                color: "#18181b",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                padding: "0 4px",
+                outline: "none",
+                textAlign: "center"
+              }}
+            >
+              {ZOOM_PRESETS.map((p) => (
+                <option key={p} value={p}>
+                  {Math.round(p * 100)}%
+                </option>
+              ))}
+              {!ZOOM_PRESETS.includes(zoom) && (
+                <option value={zoom}>{Math.round(zoom * 100)}%</option>
+              )}
+            </select>
+
+            <button 
+              onClick={() => handleZoomChange(zoom + 0.1)} 
+              title="Phóng to (Ctrl +)"
+              style={{ padding: "0 8px", border: "none", background: "none", cursor: zoom < 3.0 ? "pointer" : "not-allowed", color: "#18181b", height: "100%", fontSize: "14px", fontWeight: 600 }}
+            >
+              +
+            </button>
+
+            <div style={{ width: "1px", height: "16px", backgroundColor: "#e4e4e7" }} />
+
+            <button
+              onClick={handleFitToScreen}
+              title="Vừa màn hình (Shift + 1)"
+              style={{
+                padding: "0 8px",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "#52525b",
+                height: "100%"
+              }}
+            >
+              Fit
+            </button>
           </div>
           <input
             type="file"
@@ -5126,8 +6705,33 @@ export function SharedWorkspace({
             minWidth: 0,
             overflow: "auto",
             backgroundColor: "#f4f4f5",
+            cursor: isPanning ? "grabbing" : isSpacePressed ? "grab" : "default",
           }}
-          onClick={() => setSelectedElementId(null)}
+          onPointerDown={(e) => {
+            if (isSpacePressed || e.button === 1) { // Phím space hoặc chuột giữa
+              e.preventDefault();
+              setIsPanning(true);
+              panStartRef.current = {
+                x: e.clientX,
+                y: e.clientY,
+                scrollLeft: scrollContainerRef.current?.scrollLeft || 0,
+                scrollTop: scrollContainerRef.current?.scrollTop || 0,
+              };
+            } else {
+              setSelectedElementId(null);
+            }
+          }}
+          onPointerMove={(e) => {
+            if (isPanning && scrollContainerRef.current) {
+              const dx = e.clientX - panStartRef.current.x;
+              const dy = e.clientY - panStartRef.current.y;
+              scrollContainerRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+              scrollContainerRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+            }
+          }}
+          onPointerUp={() => {
+            if (isPanning) setIsPanning(false);
+          }}
         >
           <div
             style={{
@@ -5199,20 +6803,20 @@ export function SharedWorkspace({
                         elementId: el.id,
                       });
                     }}
-                    style={{
-                      position: "absolute",
-                      zIndex: index + 1,
-                      left: `${mmToPx(el.position_x_mm)}px`,
-                      top: `${mmToPx(el.position_y_mm)}px`,
-                      width: `${mmToPx(el.width_mm)}px`,
-                      height: `${mmToPx(el.height_mm)}px`,
-                      border: isSelected
-                        ? "1.5px solid #18181b"
-                        : "1px solid transparent",
-                      cursor: isEditing ? "text" : "move",
-                      touchAction: "none",
-                      userSelect: "none",
-                    }}
+                  style={{
+                    position: "absolute",
+                    zIndex: index + 1,
+                    left: `${mmToPx(el.position_x_mm)}px`,
+                    top: `${mmToPx(el.position_y_mm)}px`,
+                    width: `${mmToPx(el.width_mm)}px`,
+                    height: `${mmToPx(el.height_mm)}px`,
+                    border: isSelected
+                      ? "1.5px solid #18181b"
+                      : "1px solid transparent",
+                    cursor: isEditing ? "text" : "move",
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
                     onMouseEnter={(e) => {
                       if (!isSelected)
                         (e.currentTarget as HTMLDivElement).style.border =
@@ -6293,641 +7897,6 @@ export function SharedWorkspace({
       )}
     </div>
   );
-}
-</file>
-
-<file path="src/LibraryView.tsx">
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { listen } from "@tauri-apps/api/event";
-import { Search, Plus, FileText, LayoutTemplate, Trash2, Edit3, Download, LogOut, Layers } from "lucide-react";
-import { Template, Document } from "./App";
-import { exportToPdf } from "./editor/pdfExporter";
-import { useToast } from "./components/Toast";
-
-interface LibraryViewProps {
-  onLogout: () => void;
-}
-
-export function LibraryView({ onLogout }: LibraryViewProps) {
-  const { showToast, ToastComponent } = useToast();
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [activeTab, setActiveTab] = useState<"templates" | "documents">("templates");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [modal, setModal] = useState<{ type: "prompt" | "confirm"; message: string; onConfirm: (val?: string) => void; onCancel: () => void; } | null>(null);
-  const [inputValue, setInputValue] = useState("");
-
-  const handleExportPdf = async (d: any) => {
-    showToast("Đang khởi tạo và xuất PDF...", "loading");
-    try {
-      await exportToPdf(JSON.parse(d.metadata), d.name);
-      showToast("Xuất PDF thành công!", "success");
-    } catch (err) {
-      showToast("Xuất PDF thất bại!", "error");
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-    const unlisten = listen("item-saved", () => {
-      loadData();
-    });
-    return () => {
-      unlisten.then(f => f());
-    };
-  }, [activeTab]);
-
-  async function loadData() {
-    if (activeTab === "templates") {
-      setTemplates(await invoke("get_templates"));
-    } else {
-      setDocuments(await invoke("get_documents"));
-    }
-  }
-
-  const openAppWindow = async (label: string, path: string, title: string) => {
-    showToast(`Đang mở: ${title}...`, "loading");
-    try {
-      const existingWin = await WebviewWindow.getByLabel(label);
-      if (existingWin) {
-        await existingWin.setFocus();
-        showToast("Đã chuyển sang cửa sổ đang mở!", "success");
-        return;
-      }
-
-      const win = new WebviewWindow(label, {
-        url: path,
-        title: title,
-        width: 1280,
-        height: 800,
-        minWidth: 960,
-        minHeight: 640,
-      });
-
-      win.once("tauri://created", () => {
-        showToast("Đã mở cửa sổ thành công!", "success");
-      });
-
-      win.once("tauri://error", (e) => {
-        console.error("Window Error:", e);
-        showToast(`Lỗi tạo cửa sổ: ${JSON.stringify(e)}`, "error");
-      });
-    } catch (err) {
-      console.error("Open Window Exception:", err);
-      showToast(`Lỗi hệ thống: ${String(err)}`, "error");
-    }
-  };
-
-  async function useTemplate(templateId: number) {
-    setModal({
-      type: "prompt",
-      message: "Nhập tên tài liệu mới:",
-      onConfirm: async (name) => {
-        if (name) {
-          const docId = await invoke<number>("create_document", { name, templateId });
-          setActiveTab("documents");
-          loadData();
-          setModal(null);
-          openAppWindow(`document-${docId}`, `/#/document/${docId}`, `Document: ${name}`);
-        }
-      },
-      onCancel: () => setModal(null)
-    });
-  }
-
-  async function handleDelete(type: "template" | "document", id: number) {
-    setModal({
-      type: "confirm",
-      message: `Bạn có chắc chắn muốn xóa ${type === "template" ? "template" : "tài liệu"} này không? Hành động này không thể hoàn tác.`,
-      onConfirm: async () => {
-        await invoke(type === "template" ? "delete_template" : "delete_document", { id });
-        loadData();
-        setModal(null);
-      },
-      onCancel: () => setModal(null)
-    });
-  }
-
-  const filteredData = (activeTab === "templates" ? templates : documents).filter((item: any) => item.name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-  return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#fafafa" }}>
-      <style>{` .actions { opacity: 0 !important; transition: opacity 0.2s; } .document-card:hover .actions { opacity: 1 !important; } `}</style>
-      <nav style={{ height: "64px", backgroundColor: "#ffffff", borderBottom: "1px solid #e4e4e7", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 32px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", fontWeight: "600", fontSize: "16px", color: "#18181b" }}>
-          <Layers size={20}/> Template Workspace
-        </div>
-        <div style={{ display: "flex", gap: "4px", backgroundColor: "#f4f4f5", padding: "4px", borderRadius: "8px" }}>
-          <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "templates" ? "#ffffff" : "transparent", color: activeTab === "templates" ? "#18181b" : "#71717a", boxShadow: activeTab === "templates" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("templates")}>Templates</button>
-          <button style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: "500", backgroundColor: activeTab === "documents" ? "#ffffff" : "transparent", color: activeTab === "documents" ? "#18181b" : "#71717a", boxShadow: activeTab === "documents" ? "0 1px 2px rgba(0,0,0,0.05)" : "none", transition: "all 0.2s" }} onClick={() => setActiveTab("documents")}>Documents</button>
-        </div>
-        <button style={{ background: "none", border: "1px solid #e4e4e7", color: "#71717a", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }} onClick={onLogout}>
-          <LogOut size={14}/> Logout
-        </button>
-      </nav>
-
-      <div style={{ padding: "32px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" }}>
-          <h2 style={{ fontSize: "18px", fontWeight: "600", margin: "0", color: "#18181b" }}>{activeTab === "templates" ? "Templates" : "Documents"}</h2>
-          <div style={{ display: "flex", gap: "12px" }}>
-            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-              <Search color="#a1a1aa" size={16} style={{ position: "absolute", left: "10px" }} />
-              <input style={{ padding: "8px 12px 8px 32px", borderRadius: "8px", border: "1px solid #e4e4e7", fontSize: "13px", width: "200px" }} placeholder="Tìm kiếm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            </div>
-            {activeTab === "templates" && <button style={{ padding: "8px 16px", backgroundColor: "#18181b", color: "white", border: "none", borderRadius: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", display: "flex", alignItems: "center", gap: "6px" }} onClick={() => openAppWindow("template-new", "/#/template/new", "Tạo Template Mới")}><Plus size={16}/> Tạo mới</button>}
-          </div>
-        </div>
-
-        {filteredData.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "80px", border: "1px dashed #e4e4e7", borderRadius: "12px", color: "#71717a", fontSize: "14px" }}>Chưa có tài liệu nào.</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
-            {filteredData.map((item: any) => (
-              <div key={item.id} className="document-card" style={{ backgroundColor: "#ffffff", padding: "20px", borderRadius: "10px", border: "1px solid #e4e4e7", display: "flex", flexDirection: "column", gap: "16px", transition: "border 0.2s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#a1a1aa"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e4e4e7"; }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
-                  <div style={{ fontSize: "15px", fontWeight: "600", color: "#18181b" }}>{item.name}</div>
-                  <div style={{ color: "#a1a1aa" }}>{activeTab === "templates" ? <LayoutTemplate size={18}/> : <FileText size={18}/>}</div>
-                </div>
-                <div style={{ fontSize: "13px", color: "#71717a" }}>{item.description || "Không có mô tả"}</div>
-                <div style={{ marginTop: "auto", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px", opacity: 0, transition: "opacity 0.2s" }} className="actions">
-                  {activeTab === "templates" ? (
-                    <>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => useTemplate(item.id)} title="Dùng"><FileText size={16}/></button>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`template-${item.id}`, `/#/template/${item.id}`, `Template: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
-                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("template", item.id)} title="Xóa"><Trash2 size={16}/></button>
-                    </>
-                  ) : (
-                    <>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => openAppWindow(`document-${item.id}`, `/#/document/${item.id}`, `Document: ${item.name}`)} title="Sửa"><Edit3 size={16}/></button>
-                      <button style={{ padding: "6px", backgroundColor: "#f4f4f5", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleExportPdf(item)} title="Xuất PDF"><Download size={16}/></button>
-                      <button style={{ padding: "6px", backgroundColor: "#fef2f2", color: "#dc2626", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => handleDelete("document", item.id)} title="Xóa"><Trash2 size={16}/></button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {modal && (
-        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.2)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-          <div style={{ backgroundColor: "white", padding: "24px", borderRadius: "12px", width: "360px", border: "1px solid #e4e4e7" }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: "15px", fontWeight: 600 }}>{modal.type === "prompt" ? "Tạo tài liệu mới" : "Xác nhận xóa"}</h3>
-            <p style={{ margin: "0 0 20px", fontSize: "13px", color: "#71717a" }}>{modal.message}</p>
-            {modal.type === "prompt" && (
-              <input autoFocus style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #e4e4e7", marginBottom: "20px", fontSize: "13px" }} placeholder="Tên tài liệu..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} />
-            )}
-            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-              <button style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid #e4e4e7", background: "white", cursor: "pointer", fontSize: "13px" }} onClick={modal.onCancel}>Hủy</button>
-              <button style={{ padding: "8px 16px", borderRadius: "6px", border: "none", background: modal.type === "confirm" ? "#dc2626" : "#18181b", color: "white", cursor: "pointer", fontSize: "13px" }} onClick={() => modal.onConfirm(inputValue)}>{modal.type === "confirm" ? "Xóa vĩnh viễn" : "Tạo tài liệu"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-      {ToastComponent}
-    </div>
-  );
-}
-</file>
-
-<file path="src-tauri/src/repo.rs">
-use rusqlite::Connection;
-use crate::models::{User, Template, Document, DocumentContent, Element, ElementType, ElementProperties};
-use crate::error::AppError;
-use bcrypt::{hash, DEFAULT_COST};
-
-pub struct DbState(pub std::sync::Mutex<Connection>);
-
-pub struct UserRepo;
-
-impl UserRepo {
-    pub fn create(conn: &Connection, username: &str, password: &str) -> Result<i64, AppError> {
-        let hashed = hash(password, DEFAULT_COST)?;
-        conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
-            (username, hashed),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn find_by_username(conn: &Connection, username: &str) -> Result<Option<User>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, username, password_hash FROM users WHERE username = ?1")?;
-        let mut user_iter = stmt.query_map([username], |row| {
-            Ok(User {
-                id: row.get(0)?,
-                username: row.get(1)?,
-                password_hash: row.get(2)?,
-            })
-        })?;
-        
-        Ok(user_iter.next().map(|r| r.unwrap()))
-    }
-}
-
-pub struct TemplateRepo;
-
-impl TemplateRepo {
-    pub fn create(conn: &Connection, user_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<i64, AppError> {
-        if name != "Blank Template" {
-            let count = Self::count_for_user(conn, user_id)?;
-            if count >= 3 {
-                return Err(AppError::ValidationError("Template slot limit reached".into()));
-            }
-        }
-        conn.execute(
-            "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 0)",
-            (user_id, name, description, metadata),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Template>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1")?;
-        let template_iter = stmt.query_map([user_id], |row| {
-            Ok(Template {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                name: row.get(2)?,
-                description: row.get(3)?,
-                category_id: row.get(4)?,
-                thumbnail_asset_id: row.get(5)?,
-                metadata: row.get(6)?,
-                is_system: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-            })
-        })?;
-        
-        let mut templates = Vec::new();
-        for template in template_iter {
-            templates.push(template?);
-        }
-        Ok(templates)
-    }
-
-    pub fn search_by_user(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Template>, AppError> {
-        let pattern = format!("%{}%", query);
-        let mut stmt = conn.prepare("SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name LIKE ?2")?;
-        let template_iter = stmt.query_map((user_id, pattern), |row| {
-            Ok(Template {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                name: row.get(2)?,
-                description: row.get(3)?,
-                category_id: row.get(4)?,
-                thumbnail_asset_id: row.get(5)?,
-                metadata: row.get(6)?,
-                is_system: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-            })
-        })?;
-        
-        let mut templates = Vec::new();
-        for template in template_iter {
-            templates.push(template?);
-        }
-        Ok(templates)
-    }
-
-    pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64, AppError> {
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM templates WHERE user_id = ?1 AND is_system = 0",
-            [user_id],
-            |row| row.get(0),
-        )?;
-        Ok(count)
-    }
-
-    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
-        conn.execute(
-            "DELETE FROM templates WHERE id = ?1 AND user_id = ?2",
-            (id, user_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn update(conn: &Connection, template_id: i64, name: &str, description: Option<&str>, metadata: &str) -> Result<(), AppError> {
-        conn.execute(
-            "UPDATE templates SET name = ?1, description = ?2, metadata = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
-            (name, description, metadata, template_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn seed_for_user(conn: &Connection, user_id: i64) -> Result<(), AppError> {
-        let templates = ["Test Case", "Bug Report", "Meeting Notes", "Blank Template"];
-        let default_content = DocumentContent::default_content();
-
-        for name in templates.iter() {
-            let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
-                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
-                (user_id, *name),
-                |row| Ok(Template {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    name: row.get(2)?,
-                    description: row.get(3)?,
-                    category_id: row.get(4)?,
-                    thumbnail_asset_id: row.get(5)?,
-                    metadata: row.get(6)?,
-                    is_system: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
-                })
-            );
-
-            match existing_template_res {
-                Ok(template) => {
-                    if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
-                        && template.created_at == template.updated_at
-                    {
-                        if let Ok(content) = serde_json::from_str::<DocumentContent>(&template.metadata) {
-                            if content.elements.is_empty() {
-                                let populated = get_populated_content(name);
-                                let json = serde_json::to_string(&populated)?;
-                                Self::update(conn, template.id, &template.name, template.description.as_deref(), &json)?;
-                            }
-                        }
-                    }
-                },
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    let content = if *name == "Blank Template" {
-                        default_content.clone()
-                    } else {
-                        get_populated_content(name)
-                    };
-                    conn.execute(
-                        "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 1)",
-                        (user_id, name, None::<String>, &serde_json::to_string(&content)?),
-                    )?;
-                },
-                Err(e) => return Err(AppError::from(e)),
-            }
-        }
-        Ok(())
-    }
-}
-
-pub fn get_populated_content(name: &str) -> DocumentContent {
-    let mut content = DocumentContent::default_content();
-    match name {
-        "Bug Report" => {
-            content.elements = vec![
-                create_text_el("Tiêu đề lỗi", 10.0, 10.0),
-                create_text_el("Mô tả", 10.0, 25.0),
-                create_text_el("Các bước tái hiện", 10.0, 40.0),
-                create_text_el("Kết quả mong đợi", 10.0, 55.0),
-                create_text_el("Kết quả thực tế", 10.0, 70.0),
-                create_text_el("Độ nghiêm trọng", 10.0, 85.0),
-            ];
-        },
-        "Test Case" => {
-            content.elements = vec![
-                create_text_el("Tên Test Case", 10.0, 10.0),
-                create_text_el("Điều kiện tiên quyết", 10.0, 25.0),
-                create_text_el("Các bước", 10.0, 40.0),
-                create_text_el("Kết quả mong đợi", 10.0, 55.0),
-                create_text_el("Kết quả thực tế", 10.0, 70.0),
-                create_text_el("Trạng thái", 10.0, 85.0),
-            ];
-        },
-        "Meeting Notes" => {
-            content.elements = vec![
-                create_text_el("Tiêu đề cuộc họp", 10.0, 10.0),
-                create_text_el("Ngày", 10.0, 25.0),
-                create_text_el("Người tham gia", 10.0, 40.0),
-                create_text_el("Nội dung", 10.0, 55.0),
-                create_text_el("Kết luận", 10.0, 70.0),
-            ];
-        },
-        _ => {},
-    }
-    content
-}
-
-fn create_text_el(content: &str, x: f64, y: f64) -> Element {
-    Element {
-        id: format!("el-seed-{}", content),
-        element_type: ElementType::Text,
-        position_x_mm: x,
-        position_y_mm: y,
-        width_mm: 100.0,
-        height_mm: 10.0,
-        properties: ElementProperties::Text {
-            content: content.into(),
-            font_family: "Arial".into(),
-            font_size: 12.0,
-            is_bold: true,
-            is_italic: false,
-            is_underline: false,
-            alignment: "left".into(),
-        }
-    }
-}
-
-pub struct DocumentRepo;
-
-impl DocumentRepo {
-    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
-        let content_to_store = if let Some(template_id) = source_template_id {
-            let template_metadata: String = conn.query_row(
-                "SELECT metadata FROM templates WHERE id = ?1",
-                [template_id],
-                |row| row.get(0),
-            )?;
-            
-            if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
-                serde_json::to_string(&doc_content)
-                    .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
-            } else {
-                template_metadata
-            }
-        } else {
-            metadata.map(|s| s.to_string()).unwrap_or_else(|| serde_json::to_string(&DocumentContent::default_content()).unwrap())
-        };
-
-        conn.execute(
-            "INSERT INTO documents (user_id, source_template_id, name, metadata) VALUES (?1, ?2, ?3, ?4)",
-            (user_id, source_template_id, name, content_to_store),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn get_by_user(conn: &Connection, user_id: i64) -> Result<Vec<Document>, AppError> {
-        let mut stmt = conn.prepare("SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE user_id = ?1")?;
-        let doc_iter = stmt.query_map([user_id], |row| {
-            Ok(Document {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                source_template_id: row.get(2)?,
-                name: row.get(3)?,
-                metadata: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })?;
-        
-        let mut docs = Vec::new();
-        for doc in doc_iter {
-            docs.push(doc?);
-        }
-        Ok(docs)
-    }
-
-    pub fn delete(conn: &Connection, id: i64, user_id: i64) -> Result<(), AppError> {
-        conn.execute(
-            "DELETE FROM documents WHERE id = ?1 AND user_id = ?2",
-            (id, user_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn update(conn: &Connection, id: i64, metadata: &str) -> Result<(), AppError> {
-        conn.execute(
-            "UPDATE documents SET metadata = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            (metadata, id),
-        )?;
-        Ok(())
-    }
-}
-
-pub struct AssetRepo;
-
-impl AssetRepo {
-    pub fn create(conn: &Connection, user_id: i64, asset_type: &str, path: &str) -> Result<i64, AppError> {
-        conn.execute(
-            "INSERT INTO assets (user_id, type, path) VALUES (?1, ?2, ?3)",
-            (user_id, asset_type, path),
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "tauri-app",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri"
-  },
-  "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-opener": "^2",
-    "jspdf": "^4.2.1",
-    "lucide-react": "^1.39.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^7.18.3"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4"
-  }
-}
-</file>
-
-<file path="src/editor/pdfExporter.ts">
-import { jsPDF } from "jspdf";
-import { DocumentContent } from "../App";
-import { invoke } from "@tauri-apps/api/core";
-import { ROBOTO_REGULAR_BASE64, ROBOTO_BOLD_BASE64 } from "./fontsBase64";
-
-async function loadUnicodeFont(doc: jsPDF) {
-  try {
-    // Nạp font Regular
-    doc.addFileToVFS('Roboto-Regular.ttf', ROBOTO_REGULAR_BASE64);
-    doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
-
-    // Nạp font Bold
-    doc.addFileToVFS('Roboto-Bold.ttf', ROBOTO_BOLD_BASE64);
-    doc.addFont('Roboto-Bold.ttf', 'Roboto', 'bold');
-
-    // Đặt font mặc định
-    doc.setFont('Roboto');
-  } catch (err) {
-    console.warn("--> Dùng font helvetica dự phòng:", err);
-    doc.setFont("helvetica", "normal");
-  }
-}
-
-export async function exportToPdf(content: DocumentContent, fileName: string) {
-  try {
-    if (!content || !content.page) {
-      throw new Error("Dữ liệu tài liệu không hợp lệ!");
-    }
-
-    const width = content.page.width_mm || 210;
-    const height = content.page.height_mm || 297;
-    const orientation = width > height ? "landscape" : "portrait";
-
-    const doc = new jsPDF({
-      unit: "mm",
-      format: [width, height],
-      orientation,
-    });
-
-    await loadUnicodeFont(doc);
-
-    for (const el of content.elements) {
-      const x = el.position_x_mm || 0;
-      const y = el.position_y_mm || 0;
-      const w = el.width_mm || 40;
-      const h = el.height_mm || 10;
-      const props = (el.properties as any) || {};
-
-      switch (el.element_type) {
-        case "Text": {
-          doc.setFontSize(props.font_size || 12);
-          doc.setFont("Roboto", props.is_bold ? "bold" : "normal");
-          doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
-          break;
-        }
-        case "Checkbox": {
-          doc.rect(x, y, Math.min(w, h, 6), Math.min(w, h, 6));
-          if (props.checked) {
-            doc.setFontSize(10);
-            doc.setFont("Roboto", "bold");
-            doc.text("X", x + 1.2, y + 1.2, { baseline: "top" });
-          }
-          break;
-        }
-        case "Image": {
-          const assetId = props.asset_id;
-          if (assetId) {
-            try {
-              const dataUrl: string = await invoke("get_asset_base64", { id: assetId });
-              doc.addImage(dataUrl, "PNG", x, y, w, h);
-            } catch (err) {
-              doc.rect(x, y, w, h);
-            }
-          } else {
-            doc.rect(x, y, w, h);
-          }
-          break;
-        }
-      }
-    }
-
-    const safeName = (fileName || "document").replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf";
-    doc.save(safeName);
-  } catch (err: any) {
-    console.error("--> Lỗi khi xuất PDF:", err);
-    throw err;
-  }
 }
 </file>
 

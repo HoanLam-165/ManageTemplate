@@ -29,6 +29,7 @@ import {
 import { mmToPx, pxToMm } from "./coordinates";
 import { Element, DocumentContent } from "../App";
 import { exportToPdf } from "./pdfExporter";
+import { useDocumentAnalyzer } from '../hooks/useDocumentAnalyzer';
 import { useToast } from "../components/Toast";
 
 export interface SharedWorkspaceProps {
@@ -125,6 +126,7 @@ export function SharedWorkspace({
   lastSavedStateRef,
 }: SharedWorkspaceProps) {
   const { showToast, ToastComponent } = useToast();
+  const { analyzeImage, isAnalyzing } = useDocumentAnalyzer();
   const [selectedElementId, setSelectedElementId] = useState<string | null>(
     null,
   );
@@ -808,6 +810,26 @@ export function SharedWorkspace({
     setContextMenu(null);
   };
 
+  const handleScanDocument = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const scannedElements = await analyzeImage(file);
+    if (scannedElements && scannedElements.length > 0) {
+      saveSnapshot(); // Lưu lịch sử Undo
+      
+      // Nối elements mới vào (Append)
+      setContent((prev) => ({
+        ...prev,
+        elements: [...prev.elements, ...scannedElements]
+      }));
+      showToast("Đã phân tích tài liệu thành công!", "success");
+    }
+    
+    // Reset file input
+    e.target.value = '';
+  };
+
   const selectedElement = content.elements.find(
     (e) => e.id === selectedElementId,
   );
@@ -950,6 +972,32 @@ export function SharedWorkspace({
           >
             <ImageIcon size={16} /> Hình ảnh
           </button>
+          
+          <button
+            disabled={isAnalyzing}
+            style={{
+              backgroundColor: isAnalyzing ? "#f4f4f5" : "#ffffff",
+              border: "1px solid #e4e4e7",
+              padding: "6px 10px",
+              borderRadius: "6px",
+              fontSize: "13px",
+              color: isAnalyzing ? "#a1a1aa" : "#18181b",
+              cursor: isAnalyzing ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
+            onClick={() => {
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = 'image/*';
+              input.onchange = (e) => handleScanDocument(e as any);
+              input.click();
+            }}
+          >
+            <RefreshCw size={16} /> {isAnalyzing ? 'Đang phân tích...' : 'Scan'}
+          </button>
+          
           <button
             style={{
               backgroundColor: "#ffffff",
