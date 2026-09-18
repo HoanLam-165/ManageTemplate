@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DocumentContent } from "./App";
 import { SharedWorkspace } from "./editor/SharedWorkspace";
+import { useDocumentStore } from "./store/documentStore";
 
 interface EditorViewProps {
   documentId: number;
@@ -9,7 +10,6 @@ interface EditorViewProps {
 }
 
 export function EditorView({ documentId, onClose }: EditorViewProps) {
-  const [docName, setDocName] = useState("");
   const [content, setContent] = useState<DocumentContent | null>(null);
   const lastSavedStateRef = useRef<string>("");
 
@@ -18,9 +18,10 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
       const docs: any[] = await invoke("get_documents");
       const doc = docs.find((d) => Number(d.id) === Number(documentId));
       if (doc) {
-        setDocName(doc.name);
         const parsedContent = JSON.parse(doc.metadata);
         setContent(parsedContent);
+        useDocumentStore.getState().setName(doc.name);
+        useDocumentStore.getState().setContent(parsedContent);
         lastSavedStateRef.current = JSON.stringify({ name: doc.name, content: parsedContent });
       }
     }
@@ -28,9 +29,14 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
   }, [documentId]);
 
   const handleSave = async (): Promise<boolean> => {
-    if (!content) return false;
-    await invoke("update_document", { id: documentId, name: docName, metadata: JSON.stringify(content) });
-    lastSavedStateRef.current = JSON.stringify({ name: docName, content: content });
+    const { name, content } = useDocumentStore.getState();
+    await invoke("save_document", { 
+        id: documentId, 
+        name: name, 
+        metadata: JSON.stringify(content),
+        template_id: null
+    });
+    lastSavedStateRef.current = JSON.stringify({ name: name, content: content });
     return true;
   };
 
@@ -38,11 +44,6 @@ export function EditorView({ documentId, onClose }: EditorViewProps) {
 
   return (
     <SharedWorkspace
-      mode="document"
-      name={docName}
-      setName={setDocName}
-      content={content}
-      setContent={(update) => setContent(prev => prev ? (typeof update === 'function' ? (update as (prevState: DocumentContent) => DocumentContent)(prev) : update) : null)}
       onSave={handleSave}
       onClose={onClose}
       lastSavedStateRef={lastSavedStateRef}

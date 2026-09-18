@@ -50,7 +50,15 @@ export async function exportToPdf(content: DocumentContent, fileName: string) {
         case "Text": {
           doc.setFontSize(props.font_size || 12);
           doc.setFont("Roboto", props.is_bold ? "bold" : "normal");
-          doc.text(String(props.content || ""), x, y, { baseline: "top", maxWidth: w });
+          
+          const textContent = String(props.content || "");
+          const safeWidth = Math.max(2, w - 2);
+          const wrappedLines = doc.splitTextToSize(textContent, safeWidth);
+          
+          doc.text(wrappedLines, x, y, { 
+            baseline: "top", 
+            align: props.alignment || "left" as any
+          });
           break;
         }
         case "Checkbox": {

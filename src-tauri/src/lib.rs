@@ -127,11 +127,11 @@ fn get_documents(db: tauri::State<DbState>, auth: tauri::State<AuthState>) -> Re
 }
 
 #[tauri::command]
-fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
+fn create_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, name: &str, metadata: &str, template_id: Option<i64>) -> Result<i64, error::AppError> {
     let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
         .ok_or(error::AppError::AuthError("Not logged in".into()))?;
     let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
-    repo::DocumentRepo::create(&conn, user.id, name, template_id, None)
+    repo::DocumentRepo::create(&conn, user.id, name, template_id, metadata)
 }
 
 #[tauri::command]
@@ -267,6 +267,101 @@ fn get_asset_base64(
     Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
+#[tauri::command]
+fn save_template(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    id: Option<i64>,
+    name: &str,
+    description: Option<String>,
+    metadata: &str
+) -> Result<i64, error::AppError> {
+    if let Some(template_id) = id {
+        update_template(db, auth, template_id, name, description.as_deref(), metadata)?;
+        Ok(template_id)
+    } else {
+        create_template(db, auth, name, description, metadata)
+    }
+}
+
+#[tauri::command]
+fn get_template(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<models::Template, error::AppError> {
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
+    conn.query_row(
+        "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE id = ?1 AND user_id = ?2",
+        (id, user.id),
+        |row| Ok(models::Template {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            category_id: row.get(4)?,
+            thumbnail_asset_id: row.get(5)?,
+            metadata: row.get(6)?,
+            is_system: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+        })
+    ).map_err(|_| error::AppError::DatabaseError("Template not found".into()))
+}
+
+#[tauri::command]
+fn get_document(db: tauri::State<DbState>, auth: tauri::State<AuthState>, id: i64) -> Result<models::Document, error::AppError> {
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
+    conn.query_row(
+        "SELECT id, user_id, source_template_id, name, metadata, created_at, updated_at FROM documents WHERE id = ?1 AND user_id = ?2",
+        (id, user.id),
+        |row| Ok(models::Document {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            source_template_id: row.get(2)?,
+            name: row.get(3)?,
+            metadata: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))
+}
+
+#[tauri::command]
+fn save_document(
+    db: tauri::State<DbState>,
+    auth: tauri::State<AuthState>,
+    id: Option<i64>,
+    name: &str,
+    metadata: &str,
+    template_id: Option<i64>
+) -> Result<i64, error::AppError> {
+    let user = auth.0.lock().map_err(|_| error::AppError::AuthError("Auth lock failed".into()))?.clone()
+        .ok_or(error::AppError::AuthError("Not logged in".into()))?;
+    let conn = db.0.lock().map_err(|_| error::AppError::DatabaseError("Database lock failed".into()))?;
+
+    if let Some(doc_id) = id {
+        // Need to check auth for doc_id before updating
+        let doc_user_id: i64 = conn.query_row(
+            "SELECT user_id FROM documents WHERE id = ?1",
+            [doc_id],
+            |row| row.get(0),
+        ).map_err(|_| error::AppError::DatabaseError("Document not found".into()))?;
+
+        if doc_user_id != user.id {
+            return Err(error::AppError::AuthError("Access denied".into()));
+        }
+
+        conn.execute(
+            "UPDATE documents SET name = ?1, metadata = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            (name, metadata, doc_id),
+        )?;
+        Ok(doc_id)
+    } else {
+        repo::DocumentRepo::create(&conn, user.id, name, template_id, metadata)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -283,8 +378,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             register, login, logout, get_current_user, get_templates, create_template, 
-            update_template, search_templates, get_documents, create_document, 
-            update_document, delete_template, delete_document, 
+            update_template, save_template, get_template, search_templates, get_documents, create_document, 
+            update_document, save_document, get_document, delete_template, delete_document, 
             upload_asset_base64, get_asset_base64
         ])
         .run(tauri::generate_context!())

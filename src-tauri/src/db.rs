@@ -33,7 +33,7 @@ pub fn init_db_connection<P: AsRef<Path>>(path: P) -> Result<Connection, rusqlit
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
     
     // Run migrations
-    let mut migrations = vec![
+    let migrations = vec![
         ("001_initial.sql", include_str!("migrations/001_initial.sql")),
         ("002_add_timestamps.sql", include_str!("migrations/002_add_timestamps.sql")),
         ("003_add_system_flag.sql", include_str!("migrations/003_add_system_flag.sql")),

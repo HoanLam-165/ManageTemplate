@@ -1,0 +1,17 @@
+*Kích hoạt môi trường
+
+cd AI-pipeline
+source venv/Scripts/activate
+
+*Dành cho Git Bash. 
+*Nếu đầu dòng hiện (venv) là thành công.
+
+
+*Khởi động Server
+
+python -m uvicorn main:app --port 8000
+
+*Bắt buộc dùng python -m để tránh lỗi gọi nhầm môi trường máy tính gốc.
+
+*lệnh chạy frontend
+npx tauri dev

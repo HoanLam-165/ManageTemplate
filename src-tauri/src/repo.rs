@@ -123,55 +123,38 @@ impl TemplateRepo {
     }
 
     pub fn seed_for_user(conn: &Connection, user_id: i64) -> Result<(), AppError> {
+        // Check if seeding has already been done for this user
+        let seeded: bool = conn.query_row(
+            "SELECT COUNT(*) FROM app_settings WHERE key = ?1",
+            [format!("seeded_{}", user_id)],
+            |row| row.get::<_, i64>(0).map(|c| c > 0)
+        ).unwrap_or(false);
+
+        if seeded {
+            return Ok(());
+        }
+
         let templates = ["Test Case", "Bug Report", "Meeting Notes", "Blank Template"];
         let default_content = DocumentContent::default_content();
 
         for name in templates.iter() {
-            let existing_template_res: Result<Template, rusqlite::Error> = conn.query_row(
-                "SELECT id, user_id, name, description, category_id, thumbnail_asset_id, metadata, is_system, created_at, updated_at FROM templates WHERE user_id = ?1 AND name = ?2",
-                (user_id, *name),
-                |row| Ok(Template {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    name: row.get(2)?,
-                    description: row.get(3)?,
-                    category_id: row.get(4)?,
-                    thumbnail_asset_id: row.get(5)?,
-                    metadata: row.get(6)?,
-                    is_system: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
-                })
-            );
-
-            match existing_template_res {
-                Ok(template) => {
-                    if (*name == "Bug Report" || *name == "Test Case" || *name == "Meeting Notes")
-                        && template.created_at == template.updated_at
-                    {
-                        if let Ok(content) = serde_json::from_str::<DocumentContent>(&template.metadata) {
-                            if content.elements.is_empty() {
-                                let populated = get_populated_content(name);
-                                let json = serde_json::to_string(&populated)?;
-                                Self::update(conn, template.id, &template.name, template.description.as_deref(), &json)?;
-                            }
-                        }
-                    }
-                },
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    let content = if *name == "Blank Template" {
-                        default_content.clone()
-                    } else {
-                        get_populated_content(name)
-                    };
-                    conn.execute(
-                        "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 1)",
-                        (user_id, name, None::<String>, &serde_json::to_string(&content)?),
-                    )?;
-                },
-                Err(e) => return Err(AppError::from(e)),
-            }
+            let content = if *name == "Blank Template" {
+                default_content.clone()
+            } else {
+                get_populated_content(name)
+            };
+            conn.execute(
+                "INSERT INTO templates (user_id, name, description, metadata, is_system) VALUES (?1, ?2, ?3, ?4, 1)",
+                (user_id, name, None::<String>, &serde_json::to_string(&content)?),
+            )?;
         }
+        
+        // Mark seeding as done
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+            (format!("seeded_{}", user_id), "true"),
+        )?;
+
         Ok(())
     }
 }
@@ -236,27 +219,10 @@ fn create_text_el(content: &str, x: f64, y: f64) -> Element {
 pub struct DocumentRepo;
 
 impl DocumentRepo {
-    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: Option<&str>) -> Result<i64, AppError> {
-        let content_to_store = if let Some(template_id) = source_template_id {
-            let template_metadata: String = conn.query_row(
-                "SELECT metadata FROM templates WHERE id = ?1",
-                [template_id],
-                |row| row.get(0),
-            )?;
-            
-            if let Ok(doc_content) = serde_json::from_str::<DocumentContent>(&template_metadata) {
-                serde_json::to_string(&doc_content)
-                    .map_err(|e| AppError::ValidationError(format!("Failed to serialize document content: {}", e)))?
-            } else {
-                template_metadata
-            }
-        } else {
-            metadata.map(|s| s.to_string()).unwrap_or_else(|| serde_json::to_string(&DocumentContent::default_content()).unwrap())
-        };
-
+    pub fn create(conn: &Connection, user_id: i64, name: &str, source_template_id: Option<i64>, metadata: &str) -> Result<i64, AppError> {
         conn.execute(
             "INSERT INTO documents (user_id, source_template_id, name, metadata) VALUES (?1, ?2, ?3, ?4)",
-            (user_id, source_template_id, name, content_to_store),
+            (user_id, source_template_id, name, metadata),
         )?;
         Ok(conn.last_insert_rowid())
     }

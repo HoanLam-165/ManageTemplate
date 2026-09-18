@@ -9,7 +9,7 @@ export function useDocumentAnalyzer() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('http://127.0.0.1:8000/api/analyze', {
+      const response = await fetch(`${import.meta.env.VITE_ANALYZER_URL || 'http://127.0.0.1:8000'}/api/v1/analyze-document`, {
         method: 'POST',
         body: formData,
       });
@@ -31,10 +31,10 @@ export function useDocumentAnalyzer() {
             return {
               id,
               element_type: 'Text',
-              position_x_mm: el.x || 0,
-              position_y_mm: el.y || 0,
-              width_mm: el.w || 50,
-              height_mm: el.h || 10,
+              position_x_mm: el.x_mm || 0,
+              position_y_mm: el.y_mm || 0,
+              width_mm: el.width_mm || 50,
+              height_mm: el.height_mm || 10,
               properties: {
                 type: 'Text',
                 content: el.content || "Văn bản mới",
@@ -51,10 +51,10 @@ export function useDocumentAnalyzer() {
             return {
               id,
               element_type: 'Checkbox',
-              position_x_mm: el.x || 0,
-              position_y_mm: el.y || 0,
-              width_mm: el.w || 10,
-              height_mm: el.h || 10,
+              position_x_mm: el.x_mm || 0,
+              position_y_mm: el.y_mm || 0,
+              width_mm: el.width_mm || 10,
+              height_mm: el.height_mm || 10,
               properties: {
                 type: 'Checkbox',
                 checked: el.checked || false,

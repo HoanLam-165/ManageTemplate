@@ -1,15 +1,13 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { HashRouter, Routes, Route, useParams } from "react-router-dom";
+import { HashRouter, Routes, Route } from "react-router-dom";
 import "./App.css";
 import { AuthView } from "./AuthView";
 import { LibraryView } from "./LibraryView";
-import { EditorView } from "./EditorView";
-import { TemplateEditor } from "./TemplateEditor";
+import { Editor } from "./Editor";
 
 export interface User { id: number; username: string; }
-export interface Template { id: number; name: string; metadata: string; description?: string; }
+export interface Template { id: number; name: string; metadata: string; description?: string; is_system: boolean; }
 export interface Document { id: number; name: string; metadata: string; source_template_id?: number | null; }
 export interface DocumentContent { schema_version: string; page: PageConfiguration; elements: Element[]; }
 export interface PageConfiguration { width_mm: number; height_mm: number; margin_left_mm: number; margin_right_mm: number; margin_top_mm: number; margin_bottom_mm: number; }
@@ -44,49 +42,12 @@ function MainApp() {
   return <LibraryView onLogout={handleLogout}/>;
 }
 
-function DocumentWindow() {
-  const { id } = useParams();
-  return <EditorView documentId={Number(id)} onClose={() => getCurrentWindow().close()} />;
-}
-
-function TemplateWindow() {
-  const { id } = useParams();
-  const [template, setTemplate] = useState<Template | null | "new">(null);
-
-  useEffect(() => {
-    if (id === "new") {
-      setTemplate("new");
-      return;
-    }
-    async function loadTemplate() {
-      try {
-        const templates: Template[] = await invoke("get_templates");
-        const found = templates.find(t => Number(t.id) === Number(id));
-        if (found) setTemplate(found);
-      } catch (err) {
-        console.error("Failed to load template", err);
-      }
-    }
-    loadTemplate();
-  }, [id]);
-
-  if (!template) return <div>Đang tải Template...</div>;
-
-  return (
-    <TemplateEditor 
-      initialTemplate={template === "new" ? undefined : template} 
-      onClose={() => getCurrentWindow().close()} 
-    />
-  );
-}
-
 export default function App() {
   return (
     <HashRouter>
       <Routes>
         <Route element={<MainApp />} path="/"/>
-        <Route element={<DocumentWindow />} path="/document/:id"/>
-        <Route element={<TemplateWindow />} path="/template/:id"/>
+        <Route element={<Editor />} path="/editor"/>
       </Routes>
     </HashRouter>
   );
