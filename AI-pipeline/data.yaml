@@ -1,0 +1,12 @@
+train: /kaggle/working/dataset/images/train
+val: /kaggle/working/dataset/images/val
+nc: 6
+names:
+  [
+    "Header",
+    "Instruction",
+    "Label",
+    "Value",
+    "Checkbox_Empty",
+    "Checkbox_Ticked",
+  ]
